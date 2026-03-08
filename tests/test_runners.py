@@ -80,6 +80,36 @@ async def test_local_runner_shell_template_bootstraps_command(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_local_runner_shell_template_without_explicit_command_flag_defaults_to_c(tmp_path: Path):
+    shell_env = tmp_path / "shell.env"
+    shell_env.write_text("myagent(){ printf 'template default ok\\n'; }\n", encoding="utf-8")
+
+    node = NodeSpec.model_validate(
+        {
+            "id": "beta-default-c",
+            "agent": "codex",
+            "prompt": "hi",
+            "target": {
+                "kind": "local",
+                "shell": f"env BASH_ENV={shell_env} bash {{command}}",
+            },
+        }
+    )
+    prepared = PreparedExecution(
+        command=["myagent"],
+        env={},
+        cwd=str(tmp_path),
+        trace_kind="codex",
+    )
+
+    result = await LocalRunner().execute(node, prepared, _paths(tmp_path), _noop_output, lambda: False)
+
+    assert result.exit_code == 0
+    assert result.stdout_lines == ["template default ok"]
+    assert result.stderr_lines == []
+
+
+@pytest.mark.asyncio
 async def test_local_runner_shell_init_runs_in_login_interactive_shell(tmp_path: Path):
     fake_home = tmp_path / "home"
     fake_home.mkdir()

@@ -39,6 +39,9 @@ class LocalRunner(Runner):
             updated.insert(insert_at, "-i")
         return updated
 
+    def _replace_shell_template_command(self, shell_parts: list[str], placeholder: str, shell_command: str) -> list[str]:
+        return [part.replace(placeholder, shell_command) for part in shell_parts]
+
     def _command_for_target(self, node: NodeSpec, prepared: PreparedExecution) -> tuple[list[str], dict[str, str]]:
         target = node.target
         if not isinstance(target, LocalTarget) or not target.shell:
@@ -50,10 +53,20 @@ class LocalRunner(Runner):
             shell_command = f"{target.shell_init} && {shell_command}"
 
         if "{command}" in target.shell:
-            shell_parts = shlex.split(target.shell.replace("{command}", shell_command))
+            placeholder = "__AGENTFLOW_COMMAND_PLACEHOLDER__"
+            shell_parts = shlex.split(target.shell.replace("{command}", placeholder))
             if not shell_parts:
                 return prepared.command, {}
             shell_parts = self._apply_shell_options(shell_parts, target)
+            command_index = self._command_flag_index(shell_parts)
+            if command_index is None:
+                placeholder_index = next(
+                    (index for index, part in enumerate(shell_parts) if placeholder in part),
+                    None,
+                )
+                if placeholder_index is not None:
+                    shell_parts.insert(placeholder_index, "-c")
+            shell_parts = self._replace_shell_template_command(shell_parts, placeholder, shell_command)
             return shell_parts, {"AGENTFLOW_TARGET_COMMAND": command_text}
 
         shell_parts = self._apply_shell_options(shlex.split(target.shell), target)
