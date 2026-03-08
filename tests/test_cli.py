@@ -2348,7 +2348,7 @@ def test_smoke_runs_when_bundled_preflight_warns(monkeypatch):
     assert captured["wait_timeout"] is None
 
 
-def test_smoke_warns_when_bundled_preflight_detects_launch_env_override(tmp_path, monkeypatch):
+def test_smoke_keeps_expected_launch_env_override_out_of_preflight_warning_state(tmp_path, monkeypatch):
     pipeline_path = tmp_path / "bundled-smoke.yaml"
     pipeline_path.write_text(
         """name: bundled-smoke
@@ -2391,11 +2391,7 @@ nodes:
 
     assert result.exit_code == 0
     assert "Run smoke-launch-env-warning: completed" in result.stdout
-    assert result.stderr == (
-        "Doctor: warning\n"
-        "- kimi_shell_helper: ok - ready\n"
-        "- launch_env_override: warning - Node `review`: Launch env overrides current `ANTHROPIC_BASE_URL` from `https://open.bigmodel.cn/api/anthropic` to `https://api.kimi.com/coding/` via `provider.base_url`.\n"
-    )
+    assert result.stderr == ""
     assert getattr(captured["submitted_pipeline"], "name", None) == "bundled-smoke"
 
 
@@ -3724,7 +3720,7 @@ def test_doctor_with_pipeline_path_reports_auto_preflight_metadata_in_json(monke
     }
 
 
-def test_doctor_with_pipeline_path_warns_when_launch_env_overrides_current_base_url(tmp_path, monkeypatch):
+def test_doctor_with_pipeline_path_reports_expected_launch_env_override_as_ok(tmp_path, monkeypatch):
     pipeline_path = tmp_path / "pipeline.yaml"
     pipeline_path.write_text(
         """name: doctor-base-url-override
@@ -3751,9 +3747,9 @@ nodes:
 
     assert result.exit_code == 0
     assert result.stdout.startswith(
-        "Doctor: warning\n"
+        "Doctor: ok\n"
         "- kimi_shell_helper: ok - ready\n"
-        "- launch_env_override: warning - Node `review`: Launch env overrides current `ANTHROPIC_BASE_URL` from `https://open.bigmodel.cn/api/anthropic` to `https://api.kimi.com/coding/` via `provider.base_url`.\n"
+        "- launch_env_override: ok - Node `review`: Launch env uses configured `ANTHROPIC_BASE_URL` value `https://api.kimi.com/coding/` instead of current `https://open.bigmodel.cn/api/anthropic` via `provider.base_url`.\n"
     )
 
 
@@ -3788,8 +3784,8 @@ nodes:
         {"name": "kimi_shell_helper", "status": "ok", "detail": "ready"},
         {
             "name": "launch_env_override",
-            "status": "warning",
-            "detail": "Node `review`: Launch env overrides current `ANTHROPIC_BASE_URL` from `https://open.bigmodel.cn/api/anthropic` to `https://api.kimi.com/coding/` via `provider.base_url`.",
+            "status": "ok",
+            "detail": "Node `review`: Launch env uses configured `ANTHROPIC_BASE_URL` value `https://api.kimi.com/coding/` instead of current `https://open.bigmodel.cn/api/anthropic` via `provider.base_url`.",
             "context": {
                 "node_id": "review",
                 "key": "ANTHROPIC_BASE_URL",
@@ -3801,7 +3797,7 @@ nodes:
     ]
 
 
-def test_doctor_without_path_warns_when_bundled_smoke_overrides_current_base_url(tmp_path, monkeypatch):
+def test_doctor_without_path_reports_bundled_smoke_override_as_ok(tmp_path, monkeypatch):
     pipeline_path = tmp_path / "bundled-smoke.yaml"
     pipeline_path.write_text(
         """name: bundled-smoke
@@ -3829,9 +3825,9 @@ nodes:
 
     assert result.exit_code == 0
     assert result.stdout == (
-        "Doctor: warning\n"
+        "Doctor: ok\n"
         "- kimi_shell_helper: ok - ready\n"
-        "- launch_env_override: warning - Node `review`: Launch env overrides current `ANTHROPIC_BASE_URL` from `https://open.bigmodel.cn/api/anthropic` to `https://api.kimi.com/coding/` via `provider.base_url`.\n"
+        "- launch_env_override: ok - Node `review`: Launch env uses configured `ANTHROPIC_BASE_URL` value `https://api.kimi.com/coding/` instead of current `https://open.bigmodel.cn/api/anthropic` via `provider.base_url`.\n"
     )
 
 

@@ -379,21 +379,40 @@ def _pipeline_launch_env_override_checks(pipeline: object) -> list[DoctorCheck]:
             if not isinstance(source, str) or not source:
                 source_label = ""
 
-            detail = f"Node `{node_id}`: Launch env overrides current `{key}` for this node{source_label}."
+            status = "warning"
+            if source in {
+                "node.env",
+                "provider.env",
+                "provider.base_url",
+                "provider.headers",
+                "provider.api_key_env",
+            }:
+                status = "ok"
+
+            if status == "ok":
+                detail = f"Node `{node_id}`: Launch env uses configured `{key}` for this node{source_label}."
+            else:
+                detail = f"Node `{node_id}`: Launch env overrides current `{key}` for this node{source_label}."
             if not override.get("redacted"):
                 current_value = override.get("current_value")
                 launch_value = override.get("launch_value")
                 if isinstance(current_value, str) and isinstance(launch_value, str):
-                    detail = (
-                        f"Node `{node_id}`: Launch env overrides current `{key}` from `{current_value}` "
-                        f"to `{launch_value}`{source_label}."
-                    )
+                    if status == "ok":
+                        detail = (
+                            f"Node `{node_id}`: Launch env uses configured `{key}` value `{launch_value}` "
+                            f"instead of current `{current_value}`{source_label}."
+                        )
+                    else:
+                        detail = (
+                            f"Node `{node_id}`: Launch env overrides current `{key}` from `{current_value}` "
+                            f"to `{launch_value}`{source_label}."
+                        )
 
             context = {"node_id": node_id, **override}
             checks.append(
                 DoctorCheck(
                     name="launch_env_override",
-                    status="warning",
+                    status=status,
                     detail=detail,
                     context=context,
                 )
