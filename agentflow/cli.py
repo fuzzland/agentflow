@@ -6,8 +6,10 @@ from dataclasses import replace
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
+import yaml
 
 import typer
+from pydantic import ValidationError
 from agentflow.defaults import default_smoke_pipeline_path
 from agentflow.doctor import DoctorCheck, build_bash_login_shell_bridge_recommendation, build_local_smoke_doctor_report
 from agentflow.local_shell import kimi_shell_init_requires_interactive_bash_warning, shell_command_uses_kimi_helper
@@ -62,7 +64,11 @@ def _serve_web_app(web_app: object, host: str, port: int) -> None:
 def _load_pipeline(path: str) -> object:
     from agentflow.loader import load_pipeline_from_path
 
-    return load_pipeline_from_path(path)
+    try:
+        return load_pipeline_from_path(path)
+    except (OSError, ValidationError, ValueError, yaml.YAMLError) as exc:
+        typer.echo(f"Failed to load pipeline `{path}`:\n{exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
 
 def _status_value(status: object) -> str:

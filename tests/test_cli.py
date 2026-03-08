@@ -114,6 +114,32 @@ nodes:
     assert payload["nodes"][0]["target"]["cwd"] == str(task_dir.resolve())
 
 
+def test_validate_reports_pipeline_validation_error_without_traceback(tmp_path):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: cli-invalid-bash
+working_dir: .
+nodes:
+  - id: alpha
+    agent: claude
+    prompt: hi
+    target:
+      kind: local
+      shell: bash --rcfile=\"$HOME/.bashrc\" -ic 'kimi && {command}'
+      shell_init: kimi
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["validate", str(pipeline_path)])
+
+    assert result.exit_code == 1
+    assert f"Failed to load pipeline `{pipeline_path}`:" in result.stderr
+    assert "unsupported bash long option" in result.stderr
+    assert "--rcfile=..." in result.stderr
+    assert "Traceback" not in result.stderr
+
+
 def test_inspect_command_outputs_launch_summary(tmp_path, monkeypatch):
     pipeline_path = tmp_path / "pipeline.yaml"
     pipeline_path.write_text(
