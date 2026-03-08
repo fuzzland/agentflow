@@ -79,6 +79,7 @@ The bundled smoke now launches both `codex` and `claude` inside `bash -lic` so l
 By default, `agentflow smoke` now prints a compact per-node summary instead of the full run record JSON. Use `agentflow smoke --output json-summary` when you want a compact machine-readable payload for scripts, or `agentflow smoke --output json` when you want the complete persisted run record with stdout, stderr, and trace details.
 
 The bundled smoke preflight now matches that output mode too, so warning and failure reports stay in summary form by default and switch to JSON when you pass `--output json`.
+When those preflight checks detect a bash login startup bridge problem, the same smoke or run command now includes the ready-to-paste shell bridge recommendation inline instead of making you rerun Doctor separately.
 In the default `auto` mode, AgentFlow runs that preflight for the bundled smoke path, for explicit references to the bundled smoke file, and for custom local smoke pipelines that clearly bootstrap Codex or Claude through `kimi` in their local shell target. `agentflow run` now uses the same guard rails for those same pipeline shapes. Use `--preflight always` to force the same checks for other custom smoke pipelines, or `--preflight never` when you need to skip them.
 
 Check the local Codex/Claude/Kimi smoke prerequisites without launching a run:
@@ -296,7 +297,7 @@ agentflow smoke
 
 This keeps the check small while exercising both local `codex` and local `claude` end-to-end. Before the bundled smoke pipeline starts, AgentFlow runs a local preflight that verifies `codex`, confirms that `bash -lic` can find the `kimi` shell helper and still launch both `claude` and `codex` afterwards, checks that `kimi` exports `ANTHROPIC_API_KEY` for Claude-on-Kimi, and reports which bash login startup file is active, including transitive bridges such as `~/.bash_profile` -> `~/.profile` -> `~/.bashrc`. The preflight also warns when a login startup file references `~/.bashrc` but that file is missing, or when no bash login startup file exists to bridge into `~/.bashrc` at all. If `claude` only becomes available inside that login shell bootstrap, the preflight reports a warning instead of blocking the bundled smoke run. The same warning path now applies when `codex` only becomes available after the shared `kimi` bootstrap, as long as the bundled smoke pipeline can still launch it.
 
-When `~/.bash_profile` or `~/.bash_login` shadows a working `~/.profile` bridge, the preflight now tells you that the alternate startup path will never run and points you at the file that needs the bridge.
+When `~/.bash_profile` or `~/.bash_login` shadows a working `~/.profile` bridge, the preflight now tells you that the alternate startup path will never run, points you at the file that needs the bridge, and includes the bridge snippet inline when one is available.
 
 You can run the same preflight directly:
 
