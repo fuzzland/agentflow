@@ -426,3 +426,53 @@ async def test_orchestrator_redacts_inline_shell_bootstrap_secrets_in_launch_art
         "-c",
         'export ANTHROPIC_API_KEY=<redacted> && eval "$AGENTFLOW_TARGET_COMMAND"',
     ]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_does_not_use_kimi_control_events_as_final_output(tmp_path: Path):
+    class ControlOnlyKimiAdapter(AgentAdapter):
+        def prepare(self, node, prompt: str, paths: ExecutionPaths) -> PreparedExecution:
+            script = r'''
+import json
+import sys
+
+print(json.dumps({"jsonrpc": "2.0", "method": "event", "params": {"type": "TurnBegin", "payload": {"user_input": sys.argv[1]}}}))
+print(json.dumps({"jsonrpc": "2.0", "method": "event", "params": {"type": "StepBegin", "payload": {"n": 1}}}))
+raise SystemExit(1)
+'''
+            return PreparedExecution(
+                command=["python3", "-c", script, prompt],
+                env={},
+                cwd=paths.target_workdir,
+                trace_kind=node.agent.value,
+            )
+
+    adapters = AdapterRegistry()
+    adapters.register(AgentKind.KIMI, ControlOnlyKimiAdapter())
+    orchestrator = Orchestrator(store=RunStore(tmp_path / "runs"), adapters=adapters, runners=RunnerRegistry())
+    pipeline = PipelineSpec.model_validate(
+        {
+            "name": "kimi-control-events",
+            "working_dir": str(tmp_path),
+            "nodes": [
+                {
+                    "id": "review",
+                    "agent": "kimi",
+                    "prompt": "Reply with exactly: kimi ok",
+                    "success_criteria": [{"kind": "output_contains", "value": "kimi ok"}],
+                }
+            ],
+        }
+    )
+
+    run = await orchestrator.submit(pipeline)
+    completed = await orchestrator.wait(run.id, timeout=5)
+    node = completed.nodes["review"]
+
+    assert completed.status.value == "failed"
+    assert node.status.value == "failed"
+    assert node.final_response == ""
+    assert node.output == ""
+    assert node.success is False
+    assert node.success_details == ["output_contains('kimi ok')=False"]
+    assert node.attempts[0].output == ""

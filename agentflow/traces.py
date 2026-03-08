@@ -75,9 +75,15 @@ class BaseTraceParser:
         joined = "\n".join(chunk.strip() for chunk in self.final_chunks if chunk and chunk.strip()).strip()
         return joined or (self.last_message or "")
 
+    def supports_raw_stdout_fallback(self) -> bool:
+        return True
+
 
 @dataclass(slots=True)
 class CodexTraceParser(BaseTraceParser):
+    def supports_raw_stdout_fallback(self) -> bool:
+        return False
+
     def _is_ignorable_item_warning(self, item: dict[str, Any]) -> bool:
         item_type = item.get("type") or item.get("details", {}).get("type")
         if item_type != "error":
@@ -138,6 +144,9 @@ class CodexTraceParser(BaseTraceParser):
 
 @dataclass(slots=True)
 class ClaudeTraceParser(BaseTraceParser):
+    def supports_raw_stdout_fallback(self) -> bool:
+        return False
+
     def feed(self, line: str) -> list[NormalizedTraceEvent]:
         payload = _json(line)
         if payload is None:
@@ -174,6 +183,9 @@ class ClaudeTraceParser(BaseTraceParser):
 
 @dataclass(slots=True)
 class KimiTraceParser(BaseTraceParser):
+    def supports_raw_stdout_fallback(self) -> bool:
+        return False
+
     def feed(self, line: str) -> list[NormalizedTraceEvent]:
         payload = _json(line)
         if payload is None:

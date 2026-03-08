@@ -227,7 +227,9 @@ class Orchestrator:
             result.exit_code = raw.exit_code
             result.stdout_lines = attempt_stdout_lines
             result.stderr_lines = attempt_stderr_lines
-            result.final_response = parser.finalize() or "\n".join(attempt_stdout_lines).strip()
+            result.final_response = parser.finalize()
+            if not result.final_response and parser.supports_raw_stdout_fallback():
+                result.final_response = "\n".join(attempt_stdout_lines).strip()
             result.output = result.final_response if node.capture.value == "final" else "\n".join(attempt_stdout_lines)
             success_ok, success_details = evaluate_success(node, result, paths.host_workdir)
             result.success = success_ok
