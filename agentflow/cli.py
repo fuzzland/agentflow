@@ -339,6 +339,26 @@ def _pipeline_uses_kimi_smoke_preflight(pipeline: object) -> bool:
     return any(_node_uses_kimi_smoke_bootstrap(node) for node in nodes)
 
 
+def _auto_smoke_preflight_reason(path: str, pipeline: object) -> str | None:
+    resolved_path = Path(path).expanduser().resolve()
+    bundled_path = Path(default_smoke_pipeline_path()).expanduser().resolve()
+    if resolved_path == bundled_path:
+        return "path matches the bundled real-agent smoke pipeline."
+    if _pipeline_uses_kimi_smoke_preflight(pipeline):
+        return "local Codex/Claude nodes use a `kimi` shell bootstrap."
+    return None
+
+
+def _auto_smoke_preflight_metadata(path: str, pipeline: object) -> dict[str, object]:
+    reason = _auto_smoke_preflight_reason(path, pipeline)
+    if reason is not None:
+        return {"enabled": True, "reason": reason}
+    return {
+        "enabled": False,
+        "reason": "path does not match the bundled smoke pipeline and no local Codex/Claude node uses `kimi` bootstrap.",
+    }
+
+
 def _should_run_smoke_preflight(
     path: str | None,
     preflight: SmokePreflightMode,
@@ -485,6 +505,7 @@ def inspect(
         report = build_launch_inspection(pipeline, runs_dir=runs_dir, node_ids=node or None)
     except ValueError as exc:
         raise typer.BadParameter(str(exc), param_hint="--node") from exc
+    report.setdefault("pipeline", {})["auto_preflight"] = _auto_smoke_preflight_metadata(path, pipeline)
     _echo_inspection(report, output=output)
 
 

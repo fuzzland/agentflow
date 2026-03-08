@@ -135,6 +135,7 @@ nodes:
 
     assert result.exit_code == 0
     assert "Pipeline: inspect-demo" in result.stdout
+    assert "Auto preflight: enabled - local Codex/Claude nodes use a `kimi` shell bootstrap." in result.stdout
     assert "Note: Dependency references use placeholder node outputs" in result.stdout
     assert "- plan [codex/local]" in result.stdout
     assert "Model: gpt-5" in result.stdout
@@ -170,6 +171,10 @@ nodes:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["pipeline"]["name"] == "inspect-json"
+    assert payload["pipeline"]["auto_preflight"] == {
+        "enabled": True,
+        "reason": "local Codex/Claude nodes use a `kimi` shell bootstrap.",
+    }
     assert [node["id"] for node in payload["nodes"]] == ["review"]
     assert payload["nodes"][0]["resolved_provider"] == {
         "name": "kimi",
@@ -213,6 +218,7 @@ nodes:
         "name": "inspect-json-summary",
         "working_dir": str(tmp_path.resolve()),
         "node_count": 1,
+        "auto_preflight": "enabled - local Codex/Claude nodes use a `kimi` shell bootstrap.",
     }
     assert payload["nodes"] == [
         {
@@ -228,6 +234,28 @@ nodes:
             "env_keys": ["AGENTFLOW_TARGET_COMMAND", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"],
         }
     ]
+
+
+def test_inspect_command_reports_disabled_auto_preflight_for_plain_pipeline(tmp_path):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-no-preflight
+working_dir: .
+nodes:
+  - id: plan
+    agent: codex
+    prompt: "Reply with exactly: codex ok"
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json-summary"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["pipeline"]["auto_preflight"] == (
+        "disabled - path does not match the bundled smoke pipeline and no local Codex/Claude node uses `kimi` bootstrap."
+    )
 
 
 def test_inspect_command_redacts_auth_and_header_style_env_keys(tmp_path, monkeypatch):

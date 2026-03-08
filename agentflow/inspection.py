@@ -14,6 +14,17 @@ from agentflow.utils import looks_sensitive_key
 _REDACTED = "<redacted>"
 _GENERATED = "<generated>"
 
+
+def _auto_preflight_summary(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    enabled = value.get("enabled")
+    reason = value.get("reason")
+    if not isinstance(reason, str) or not reason:
+        return None
+    status = "enabled" if enabled else "disabled"
+    return f"{status} - {reason}"
+
 def _preview_text(text: str | None, *, limit: int = 100) -> str | None:
     if text is None:
         return None
@@ -248,6 +259,10 @@ def build_launch_inspection_summary(report: dict[str, Any]) -> dict[str, Any]:
         "nodes": [],
     }
 
+    auto_preflight = _auto_preflight_summary(pipeline.get("auto_preflight"))
+    if auto_preflight:
+        summary["pipeline"]["auto_preflight"] = auto_preflight
+
     notes = report.get("notes")
     if notes:
         summary["notes"] = list(notes)
@@ -301,6 +316,9 @@ def build_launch_inspection_summary(report: dict[str, Any]) -> dict[str, Any]:
 def render_launch_inspection_summary(report: dict[str, Any]) -> str:
     pipeline = report["pipeline"]
     lines = [f"Pipeline: {pipeline['name']}", f"Working dir: {pipeline['working_dir']}"]
+    auto_preflight = _auto_preflight_summary(pipeline.get("auto_preflight"))
+    if auto_preflight:
+        lines.append(f"Auto preflight: {auto_preflight}")
     for note in report.get("notes", []):
         lines.append(f"Note: {note}")
     lines.append("Nodes:")
