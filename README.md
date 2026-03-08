@@ -131,7 +131,7 @@ Built-in provider shorthands:
 
 ### Local
 
-Runs the prepared agent command directly on the host. Set `target.shell` to wrap the command in a specific shell, such as `bash -lc`. You can also use a `{command}` placeholder in the shell string to run shell bootstrap steps before the prepared agent command.
+Runs the prepared agent command directly on the host. Set `target.shell` to wrap the command in a specific shell, such as `bash -lc`. If you provide a shell name without an explicit command flag, AgentFlow uses `-c` by default; opt into startup file loading with `shell_login: true` and `shell_interactive: true`. You can also use a `{command}` placeholder in the shell string to run shell bootstrap steps before the prepared agent command.
 
 For common shell helper workflows, you can keep the config declarative instead of hand-writing a quoted shell template:
 
@@ -144,7 +144,7 @@ target:
   shell_init: kimi
 ```
 
-This runs the node inside `bash`, enables login and interactive startup files, executes `kimi`, and then launches the prepared agent command. It is useful for helper functions defined in `~/.bashrc`. If your login shell uses `~/.bash_profile`, make sure it sources `~/.bashrc`; otherwise Bash falls back to `~/.profile`.
+This runs the node inside `bash`, explicitly enables login and interactive startup files, executes `kimi`, and then launches the prepared agent command. It is useful for helper functions defined in `~/.bashrc`. If your login shell uses `~/.bash_profile`, make sure it sources `~/.bashrc`; otherwise Bash reads `~/.profile` when no `~/.bash_profile` or `~/.bash_login` file is present.
 
 ### Container
 
