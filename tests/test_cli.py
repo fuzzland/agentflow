@@ -228,6 +228,7 @@ nodes:
         encoding="utf-8",
     )
     monkeypatch.setenv("ANTHROPIC_API_KEY", "super-secret")
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
 
     result = runner.invoke(app, ["inspect", str(pipeline_path), "--node", "review", "--output", "json"])
 
@@ -282,6 +283,7 @@ nodes:
         encoding="utf-8",
     )
     monkeypatch.setenv("ANTHROPIC_API_KEY", "super-secret")
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
 
     result = runner.invoke(app, ["inspect", str(pipeline_path), "--node", "review", "--output", "json-summary"])
 
@@ -310,6 +312,37 @@ nodes:
             "cwd": str(tmp_path.resolve()),
             "env_keys": ["AGENTFLOW_TARGET_COMMAND", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"],
         }
+    ]
+
+
+def test_inspect_command_summary_warns_when_launch_env_overrides_current_base_url(tmp_path, monkeypatch):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-base-url-override
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    provider: kimi
+    prompt: hi
+    target:
+      kind: local
+      shell: bash
+      shell_login: true
+      shell_interactive: true
+      shell_init: kimi
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "super-secret")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json-summary"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["nodes"][0]["warnings"] == [
+        "Launch env overrides current `ANTHROPIC_BASE_URL` from `https://open.bigmodel.cn/api/anthropic` to `https://api.kimi.com/coding/`."
     ]
 
 
@@ -798,7 +831,7 @@ nodes:
     ]
 
 
-def test_inspect_command_warns_when_kimi_shell_init_uses_non_bash_shell(tmp_path):
+def test_inspect_command_warns_when_kimi_shell_init_uses_non_bash_shell(tmp_path, monkeypatch):
     pipeline_path = tmp_path / "pipeline.yaml"
     pipeline_path.write_text(
         """name: inspect-non-bash-kimi
@@ -815,6 +848,8 @@ nodes:
 """,
         encoding="utf-8",
     )
+
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
 
     result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json"])
 
