@@ -118,6 +118,14 @@ Top-level pipeline controls include:
 - `concurrency`: max parallel nodes within a run
 - `fail_fast`: skip downstream work after the first failed node
 
+Built-in provider shorthands:
+
+- `codex`: `openai`
+- `claude`: `anthropic`, `kimi`
+- `kimi`: `kimi`, `moonshot`, `moonshot-ai`
+
+`provider: kimi` is intentionally rejected on `codex` nodes. Codex requires an OpenAI Responses API backend, and Kimi's public endpoints do not expose `/responses`.
+
 ## Execution targets
 
 ### Local
