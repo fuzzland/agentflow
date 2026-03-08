@@ -69,13 +69,20 @@ def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
     env = os.environ.copy()
     if home is not None:
         env["HOME"] = str(home)
-    result = subprocess.run(
-        ["bash", "-lic", f"type {shlex.quote('kimi')}"] ,
-        check=False,
-        capture_output=True,
-        env=env,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["bash", "-lic", f"type {shlex.quote('kimi')}"] ,
+            check=False,
+            capture_output=True,
+            env=env,
+            text=True,
+        )
+    except OSError as exc:
+        return DoctorCheck(
+            name="kimi_shell_helper",
+            status="failed",
+            detail=f"Could not launch `bash -lic` to verify `kimi`: {exc}",
+        )
     if result.returncode == 0:
         return DoctorCheck(
             name="kimi_shell_helper",
