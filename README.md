@@ -52,7 +52,7 @@ Run the bundled real-agent smoke check:
 agentflow smoke
 ```
 
-The bundled smoke now launches both `codex` and `claude` inside `bash -lic` so login-shell startup files are exercised for local CLI installs. The `claude` node also runs `kimi` first, which keeps the default smoke aligned with common Claude-on-Kimi shell helper setups.
+The bundled smoke now launches both `codex` and `claude` inside `bash -lic` so login-shell startup files are exercised for local CLI installs. Both nodes also run `kimi` first, which keeps the default smoke aligned with shared Kimi bootstrap setups where the same shell helper prepares both CLIs.
 
 By default, `agentflow smoke` now prints a compact per-node summary instead of the full run record JSON. Use `agentflow smoke --output json` when you want the complete machine-readable payload.
 
@@ -251,7 +251,7 @@ Run a real local smoke check with your installed CLIs:
 agentflow smoke
 ```
 
-This keeps the check small while exercising both local `codex` and local `claude` end-to-end. Before the bundled smoke pipeline starts, AgentFlow runs a local preflight that verifies `codex`, confirms that `bash -lic` can find the `kimi` shell helper and still launch `claude` afterwards, checks that `kimi` exports `ANTHROPIC_API_KEY` for Claude-on-Kimi, and reports which bash login startup file is active, including transitive bridges such as `~/.bash_profile` -> `~/.profile` -> `~/.bashrc`. The preflight also warns when a login startup file references `~/.bashrc` but that file is missing, or when no bash login startup file exists to bridge into `~/.bashrc` at all. If `claude` only becomes available inside that login shell bootstrap, the preflight reports a warning instead of blocking the bundled smoke run.
+This keeps the check small while exercising both local `codex` and local `claude` end-to-end. Before the bundled smoke pipeline starts, AgentFlow runs a local preflight that verifies `codex`, confirms that `bash -lic` can find the `kimi` shell helper and still launch both `claude` and `codex` afterwards, checks that `kimi` exports `ANTHROPIC_API_KEY` for Claude-on-Kimi, and reports which bash login startup file is active, including transitive bridges such as `~/.bash_profile` -> `~/.profile` -> `~/.bashrc`. The preflight also warns when a login startup file references `~/.bashrc` but that file is missing, or when no bash login startup file exists to bridge into `~/.bashrc` at all. If `claude` only becomes available inside that login shell bootstrap, the preflight reports a warning instead of blocking the bundled smoke run.
 
 You can run the same preflight directly:
 
