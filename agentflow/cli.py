@@ -830,5 +830,9 @@ def doctor(
     raise typer.Exit(code=0 if report.status != "failed" else 1)
 
 
-if __name__ == "__main__":
+def main() -> None:
     app()
+
+
+if __name__ == "__main__":
+    main()

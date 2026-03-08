@@ -81,6 +81,23 @@ nodes:
     assert payload["nodes"][0]["id"] == "alpha"
 
 
+def test_python_module_entrypoint_displays_help():
+    repo_root = Path(__file__).resolve().parents[1]
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "agentflow", "--help"],
+        capture_output=True,
+        check=False,
+        cwd=repo_root,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Usage:" in completed.stdout
+    assert "validate" in completed.stdout
+    assert "smoke" in completed.stdout
+
+
 def test_validate_resolves_working_dir_relative_to_pipeline_file(tmp_path, monkeypatch):
     pipeline_dir = tmp_path / "pipelines"
     pipeline_dir.mkdir()
