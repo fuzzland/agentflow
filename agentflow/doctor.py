@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+from agentflow.utils import looks_sensitive_key
 
 
 _BASH_LOGIN_FILENAMES = (".bash_profile", ".bash_login", ".profile")
@@ -14,6 +17,12 @@ _KIMI_HELPER_MISSING_EXIT_CODE = 11
 _CLAUDE_IN_SHELL_MISSING_EXIT_CODE = 12
 _KIMI_API_KEY_MISSING_EXIT_CODE = 13
 _CODEX_AFTER_KIMI_MISSING_EXIT_CODE = 14
+_REDACTED = "<redacted>"
+_BASH_INTERACTIVE_STDERR_NOISE = (
+    "bash: cannot set terminal process group (",
+    "bash: no job control in this shell",
+)
+_DIAGNOSTIC_TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 
 
 def _strip_shell_comments(line: str) -> str:
@@ -70,6 +79,36 @@ def _shell_source_target_matches(token: str, filename: str, home: Path | None = 
     if home is not None:
         accepted_targets.add(str((home / filename).resolve()))
     return normalized in accepted_targets
+
+
+def _is_bash_interactive_stderr_noise(line: str) -> bool:
+    return any(line.startswith(prefix) for prefix in _BASH_INTERACTIVE_STDERR_NOISE)
+
+
+def _redact_sensitive_diagnostic_line(line: str) -> str:
+    for match in _DIAGNOSTIC_TOKEN_PATTERN.finditer(line):
+        key = match.group(0)
+        if not looks_sensitive_key(key):
+            continue
+        separator_index = match.end()
+        while separator_index < len(line) and line[separator_index] in {" ", "\t", '"', "'"}:
+            separator_index += 1
+        if separator_index >= len(line) or line[separator_index] not in {"=", ":"}:
+            continue
+        separator = line[separator_index]
+        spacing = " " if separator == ":" else ""
+        return f"{line[:separator_index + 1]}{spacing}{_REDACTED}"
+    return line
+
+
+def _format_shell_diagnostic(stderr: str) -> str:
+    sanitized_lines = []
+    for raw_line in stderr.splitlines():
+        line = raw_line.strip()
+        if not line or _is_bash_interactive_stderr_noise(line):
+            continue
+        sanitized_lines.append(_redact_sensitive_diagnostic_line(line))
+    return "\n".join(sanitized_lines).strip()
 
 
 @dataclass(frozen=True)
@@ -136,7 +175,7 @@ def _check_codex_executable(home: Path | None = None) -> DoctorCheck:
             status="failed",
             detail="`codex` is not on PATH and is unavailable in `bash -lic`.",
         )
-    detail = result.stderr.strip() or f"exit status {result.returncode}"
+    detail = _format_shell_diagnostic(result.stderr) or f"exit status {result.returncode}"
     return DoctorCheck(
         name="codex",
         status="failed",
@@ -364,7 +403,7 @@ def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
                 "the bundled smoke pipeline will not be able to authenticate Claude-on-Kimi."
             ),
         )
-    detail = result.stderr.strip() or f"exit status {result.returncode}"
+    detail = _format_shell_diagnostic(result.stderr) or f"exit status {result.returncode}"
     return DoctorCheck(
         name="kimi_shell_helper",
         status="failed",
