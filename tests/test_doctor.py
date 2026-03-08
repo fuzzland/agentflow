@@ -133,6 +133,38 @@ def test_local_smoke_doctor_report_checks_kimi_helper_in_supplied_home(tmp_path:
     }
 
 
+def test_local_smoke_doctor_report_warns_when_claude_is_only_available_in_bash_shell(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (home / ".bashrc").write_text("kimi(){ :; }\n", encoding="utf-8")
+
+    def fake_which(name: str) -> str | None:
+        if name == "codex":
+            return "/tmp/codex"
+        return None
+
+    monkeypatch.setattr("agentflow.doctor.shutil.which", fake_which)
+    monkeypatch.setattr(
+        "agentflow.doctor.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr=""),
+    )
+
+    report = build_local_smoke_doctor_report(home=home)
+
+    assert report.status == "warning"
+    assert report.as_dict()["checks"][1] == {
+        "name": "claude",
+        "status": "warning",
+        "detail": "`claude` is not on PATH outside the smoke shell bootstrap; `bash -lic` plus `kimi` must provide it for the bundled smoke pipeline.",
+    }
+    assert report.as_dict()["checks"][-1] == {
+        "name": "kimi_shell_helper",
+        "status": "ok",
+        "detail": "`kimi` is available in `bash -lic`, exports `ANTHROPIC_API_KEY`, and keeps `claude` available for the bundled smoke pipeline.",
+    }
+
+
 def test_local_smoke_doctor_report_fails_when_kimi_helper_does_not_export_api_key(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
