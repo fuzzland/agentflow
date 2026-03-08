@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 import agentflow.cli
 from agentflow.cli import app
+from agentflow.doctor import DoctorCheck, DoctorReport
 
 runner = CliRunner()
 
@@ -19,10 +20,24 @@ def _capture_pipeline_loader(captured: dict[str, object], fake_pipeline: object)
     return _load
 
 
+def _doctor_report(status: str = "ok", detail: str = "ready") -> DoctorReport:
+    check_status = "failed" if status == "failed" else "ok"
+    return DoctorReport(
+        status=status,
+        checks=[DoctorCheck(name="kimi_shell_helper", status=check_status, detail=detail)],
+    )
+
+
 def test_validate_command_outputs_normalized_pipeline(tmp_path):
     pipeline_path = tmp_path / "pipeline.yaml"
     pipeline_path.write_text(
-        "name: cli\nworking_dir: .\nnodes:\n  - id: alpha\n    agent: codex\n    prompt: hi\n",
+        """name: cli
+working_dir: .
+nodes:
+  - id: alpha
+    agent: codex
+    prompt: hi
+""",
         encoding="utf-8",
     )
 
@@ -43,7 +58,16 @@ def test_validate_resolves_working_dir_relative_to_pipeline_file(tmp_path, monke
     task_dir.mkdir()
     pipeline_path = pipeline_dir / "pipeline.yaml"
     pipeline_path.write_text(
-        "name: cli\nworking_dir: workspace\nnodes:\n  - id: alpha\n    agent: codex\n    prompt: hi\n    target:\n      kind: local\n      cwd: task\n",
+        """name: cli
+working_dir: workspace
+nodes:
+  - id: alpha
+    agent: codex
+    prompt: hi
+    target:
+      kind: local
+      cwd: task
+""",
         encoding="utf-8",
     )
     other_dir = tmp_path / "elsewhere"
@@ -149,6 +173,7 @@ def test_smoke_uses_bundled_pipeline_by_default(monkeypatch):
         return object(), FakeOrchestrator()
 
     fake_pipeline = object()
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
     monkeypatch.setattr(agentflow.cli, "_build_runtime", fake_build_runtime)
     monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: "examples/local-real-agents-kimi-smoke.yaml")
     monkeypatch.setattr(agentflow.cli, "load_pipeline_from_path", _capture_pipeline_loader(captured, fake_pipeline))
@@ -181,6 +206,7 @@ def test_smoke_accepts_explicit_pipeline_path(monkeypatch):
                 model_dump=lambda mode="json": {"id": run_id, "status": "completed"},
             )
 
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: (_ for _ in ()).throw(AssertionError("doctor should not run")))
     monkeypatch.setattr(agentflow.cli, "_build_runtime", lambda runs_dir, max_concurrent_runs: (object(), FakeOrchestrator()))
     fake_pipeline = object()
     monkeypatch.setattr(agentflow.cli, "load_pipeline_from_path", _capture_pipeline_loader(captured, fake_pipeline))
@@ -193,3 +219,29 @@ def test_smoke_accepts_explicit_pipeline_path(monkeypatch):
     assert captured["submitted_pipeline"] is fake_pipeline
     assert captured["wait_run_id"] == "smoke-custom"
     assert captured["wait_timeout"] is None
+
+
+def test_doctor_outputs_json_report(monkeypatch):
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {
+        "status": "ok",
+        "checks": [{"name": "kimi_shell_helper", "status": "ok", "detail": "ready"}],
+    }
+
+
+def test_smoke_stops_when_bundled_preflight_fails(monkeypatch):
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report(status="failed", detail="missing"))
+    monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: "examples/local-real-agents-kimi-smoke.yaml")
+    monkeypatch.setattr(agentflow.cli, "load_pipeline_from_path", lambda path: (_ for _ in ()).throw(AssertionError("pipeline should not load")))
+
+    result = runner.invoke(app, ["smoke"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {
+        "status": "failed",
+        "checks": [{"name": "kimi_shell_helper", "status": "failed", "detail": "missing"}],
+    }

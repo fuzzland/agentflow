@@ -8,6 +8,7 @@ import uvicorn
 
 from agentflow.app import create_app
 from agentflow.defaults import default_smoke_pipeline_path
+from agentflow.doctor import build_local_smoke_doctor_report
 from agentflow.loader import load_pipeline_from_path
 from agentflow.orchestrator import Orchestrator
 from agentflow.store import RunStore
@@ -32,6 +33,10 @@ def _run_pipeline_path(path: str, runs_dir: str, max_concurrent_runs: int) -> No
         raise typer.Exit(code=0 if completed.status.value == "completed" else 1)
 
     asyncio.run(_run())
+
+
+def _doctor_report():
+    return build_local_smoke_doctor_report()
 
 
 @app.command()
@@ -66,7 +71,19 @@ def smoke(
     runs_dir: str = typer.Option(".agentflow/runs", envvar="AGENTFLOW_RUNS_DIR"),
     max_concurrent_runs: int = typer.Option(2, envvar="AGENTFLOW_MAX_CONCURRENT_RUNS"),
 ) -> None:
+    if path is None:
+        report = _doctor_report()
+        if report.status == "failed":
+            typer.echo(json.dumps(report.as_dict(), indent=2))
+            raise typer.Exit(code=1)
     _run_pipeline_path(path or default_smoke_pipeline_path(), runs_dir, max_concurrent_runs)
+
+
+@app.command()
+def doctor() -> None:
+    report = _doctor_report()
+    typer.echo(json.dumps(report.as_dict(), indent=2))
+    raise typer.Exit(code=0 if report.status != "failed" else 1)
 
 
 if __name__ == "__main__":
