@@ -547,6 +547,37 @@ nodes:
     assert "Add `-i`, set `target.shell_interactive: true`, or use `bash -lic`." in result.stdout
 
 
+def test_inspect_command_detects_eval_style_kimi_wrapper_in_auto_preflight(tmp_path):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-kimi-eval-wrapper
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    prompt: hi
+    target:
+      kind: local
+      shell: "bash -lc 'eval \\\"$(kimi)\\\" && {command}'"
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["pipeline"]["auto_preflight"] == {
+        "enabled": True,
+        "reason": "local Codex/Claude nodes use a `kimi` shell bootstrap.",
+        "matches": [{"node_id": "review", "agent": "claude", "trigger": "target.shell"}],
+        "match_summary": ["review (claude) via `target.shell`"],
+    }
+    assert payload["nodes"][0]["warnings"] == [
+        "`target.shell` uses `kimi` with bash without interactive startup; helpers from `~/.bashrc` are usually unavailable. Add `-i`, set `target.shell_interactive: true`, or use `bash -lic`."
+    ]
+
+
 @pytest.mark.parametrize(
     "command",
     [
@@ -647,6 +678,61 @@ nodes:
 
     assert result.exit_code == 0
     assert captured == {"pipeline": "kimi-wrapper-preflight-warning"}
+    payload = json.loads(result.stderr)
+    assert payload["status"] == "warning"
+    assert payload["checks"] == [
+        {"name": "kimi_shell_helper", "status": "ok", "detail": "ready"},
+        {
+            "name": "kimi_shell_bootstrap",
+            "status": "warning",
+            "detail": "Node `review`: `target.shell` uses `kimi` with bash without interactive startup; helpers from `~/.bashrc` are usually unavailable. Add `-i`, set `target.shell_interactive: true`, or use `bash -lic`.",
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["run"],
+        ["smoke"],
+    ],
+)
+def test_run_and_smoke_preflight_warn_when_eval_style_kimi_wrapper_is_not_interactive(tmp_path, monkeypatch, command):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: kimi-eval-wrapper-preflight-warning
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    prompt: hi
+    target:
+      kind: local
+      shell: "bash -lc 'eval \\\"$(kimi)\\\" && {command}'"
+""",
+        encoding="utf-8",
+    )
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        agentflow.cli,
+        "build_local_smoke_doctor_report",
+        lambda: DoctorReport(
+            status="ok",
+            checks=[DoctorCheck(name="kimi_shell_helper", status="ok", detail="ready")],
+        ),
+    )
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_run_pipeline",
+        lambda pipeline, runs_dir, max_concurrent_runs, output: captured.setdefault("pipeline", pipeline.name),
+    )
+
+    result = runner.invoke(app, [*command, str(pipeline_path), "--output", "json"])
+
+    assert result.exit_code == 0
+    assert captured == {"pipeline": "kimi-eval-wrapper-preflight-warning"}
     payload = json.loads(result.stderr)
     assert payload["status"] == "warning"
     assert payload["checks"] == [

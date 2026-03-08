@@ -28,6 +28,10 @@ def test_shell_command_uses_kimi_helper_ignores_probe_commands(command: str):
         "bash -lc 'command -v kimi >/dev/null && kimi && {command}'",
         "bash -lc 'type kimi >/dev/null 2>&1; kimi; {command}'",
         "bash -lc 'which kimi >/dev/null; kimi && {command}'",
+        'eval "$(kimi)"',
+        'source <(kimi)',
+        "bash -lc 'eval \"$(kimi)\" && {command}'",
+        "bash -lc 'source <(kimi) && {command}'",
     ],
 )
 def test_shell_command_uses_kimi_helper_detects_actual_bootstrap_after_probe(command: str):
@@ -64,3 +68,15 @@ def test_kimi_shell_init_requires_interactive_bash_warning_ignores_plain_text_ki
     }
 
     assert kimi_shell_init_requires_interactive_bash_warning(target) is None
+
+
+def test_kimi_shell_init_requires_interactive_bash_warning_detects_eval_style_shell_wrapper():
+    target = {
+        "kind": "local",
+        "shell": "bash -lc 'eval \"$(kimi)\" && {command}'",
+    }
+
+    assert kimi_shell_init_requires_interactive_bash_warning(target) == (
+        "`target.shell` uses `kimi` with bash without interactive startup; helpers from `~/.bashrc` are usually "
+        "unavailable. Add `-i`, set `target.shell_interactive: true`, or use `bash -lic`."
+    )
