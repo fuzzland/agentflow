@@ -52,6 +52,8 @@ Run the bundled real-agent smoke check:
 agentflow smoke
 ```
 
+The bundled smoke now launches both `codex` and `claude` inside `bash -lic` so login-shell startup files are exercised for local CLI installs. The `claude` node also runs `kimi` first, which keeps the default smoke aligned with common Claude-on-Kimi shell helper setups.
+
 By default, `agentflow smoke` now prints a compact per-node summary instead of the full run record JSON. Use `agentflow smoke --output json` when you want the complete machine-readable payload.
 
 Check the local Codex/Claude/Kimi smoke prerequisites without launching a run:
