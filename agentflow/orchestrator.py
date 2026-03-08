@@ -211,9 +211,11 @@ class Orchestrator:
 
             async def on_output(stream_name: str, line: str) -> None:
                 if stream_name == "stdout":
-                    attempt_stdout_lines.append(line)
                     await self.store.append_artifact_text(run_id, node_id, "stdout.log", line + "\n")
-                    for event in parser.feed(line):
+                    parsed_events = parser.feed(line)
+                    if parsed_events or parser.supports_raw_stdout_fallback():
+                        attempt_stdout_lines.append(line)
+                    for event in parsed_events:
                         result.trace_events.append(event)
                         await self._publish_trace(run_id, node_id, event)
                 else:

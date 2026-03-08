@@ -476,3 +476,109 @@ raise SystemExit(1)
     assert node.success is False
     assert node.success_details == ["output_contains('kimi ok')=False"]
     assert node.attempts[0].output == ""
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_filters_ignored_claude_hook_stdout_lines(tmp_path: Path):
+    class HookyClaudeAdapter(AgentAdapter):
+        def prepare(self, node, prompt: str, paths: ExecutionPaths) -> PreparedExecution:
+            script = r'''
+import json
+
+print(json.dumps({"type": "system", "subtype": "hook_started", "hook_name": "SessionStart:startup"}))
+print(json.dumps({"type": "system", "subtype": "hook_response", "hook_name": "SessionStart:startup", "output": "very large startup payload"}))
+print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "claude ok"}]}}))
+print(json.dumps({"type": "result", "result": "claude ok"}))
+'''
+            return PreparedExecution(
+                command=["python3", "-c", script],
+                env={},
+                cwd=paths.target_workdir,
+                trace_kind=node.agent.value,
+            )
+
+    adapters = AdapterRegistry()
+    adapters.register(AgentKind.CLAUDE, HookyClaudeAdapter())
+    orchestrator = Orchestrator(store=RunStore(tmp_path / "runs"), adapters=adapters, runners=RunnerRegistry())
+    pipeline = PipelineSpec.model_validate(
+        {
+            "name": "claude-hook-filter",
+            "working_dir": str(tmp_path),
+            "nodes": [
+                {
+                    "id": "review",
+                    "agent": "claude",
+                    "prompt": "Reply with exactly: claude ok",
+                    "capture": "trace",
+                    "success_criteria": [{"kind": "output_contains", "value": "claude ok"}],
+                }
+            ],
+        }
+    )
+
+    run = await orchestrator.submit(pipeline)
+    completed = await orchestrator.wait(run.id, timeout=5)
+    node = completed.nodes["review"]
+    stdout_log = orchestrator.store.read_artifact_text(completed.id, "review", "stdout.log")
+
+    assert completed.status.value == "completed"
+    assert all("hook_" not in line for line in node.stdout_lines)
+    assert node.output is not None and "hook_response" not in node.output
+    assert "hook_response" in stdout_log
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_filters_ignored_codex_warning_stdout_lines(tmp_path: Path):
+    class WarningCodexAdapter(AgentAdapter):
+        def prepare(self, node, prompt: str, paths: ExecutionPaths) -> PreparedExecution:
+            script = r'''
+import json
+
+print(json.dumps({
+    "type": "item.completed",
+    "item": {
+        "id": "item_0",
+        "type": "error",
+        "message": "Under-development features enabled: responses_websockets_v2. To suppress this warning, set suppress_unstable_features_warning = true."
+    }
+}))
+print(json.dumps({
+    "type": "response.output_item.done",
+    "item": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "codex ok"}]}
+}))
+'''
+            return PreparedExecution(
+                command=["python3", "-c", script],
+                env={},
+                cwd=paths.target_workdir,
+                trace_kind=node.agent.value,
+            )
+
+    adapters = AdapterRegistry()
+    adapters.register(AgentKind.CODEX, WarningCodexAdapter())
+    orchestrator = Orchestrator(store=RunStore(tmp_path / "runs"), adapters=adapters, runners=RunnerRegistry())
+    pipeline = PipelineSpec.model_validate(
+        {
+            "name": "codex-warning-filter",
+            "working_dir": str(tmp_path),
+            "nodes": [
+                {
+                    "id": "plan",
+                    "agent": "codex",
+                    "prompt": "Reply with exactly: codex ok",
+                    "capture": "trace",
+                    "success_criteria": [{"kind": "output_contains", "value": "codex ok"}],
+                }
+            ],
+        }
+    )
+
+    run = await orchestrator.submit(pipeline)
+    completed = await orchestrator.wait(run.id, timeout=5)
+    node = completed.nodes["plan"]
+    stdout_log = orchestrator.store.read_artifact_text(completed.id, "plan", "stdout.log")
+
+    assert completed.status.value == "completed"
+    assert all("Under-development features enabled:" not in line for line in node.stdout_lines)
+    assert node.output is not None and "Under-development features enabled:" not in node.output
+    assert "Under-development features enabled:" in stdout_log
