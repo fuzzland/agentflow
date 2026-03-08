@@ -1,4 +1,15 @@
-.PHONY: test inspect-local doctor-local smoke-local check-local
+.DEFAULT_GOAL := help
+
+.PHONY: help test inspect-local doctor-local smoke-local check-local
+
+help:
+	@printf '%s\n' \
+	  'Available targets:' \
+	  '  test          Run the Python test suite' \
+	  '  inspect-local Inspect the bundled local Kimi-backed smoke pipeline' \
+	  '  doctor-local  Check local Codex/Claude/Kimi smoke prerequisites' \
+	  '  smoke-local   Run the bundled local Codex + Claude-on-Kimi smoke test' \
+	  '  check-local   Run doctor-local, then smoke-local'
 
 test:
 	python3 -m pytest -q
