@@ -97,7 +97,7 @@ You can also point Doctor at a custom pipeline to surface the same pipeline-spec
 agentflow doctor path/to/pipeline.yaml --output summary
 ```
 
-That keeps it easy to validate real Codex/Claude/Kimi DAGs before you launch them, especially when a node depends on a local `kimi` shell helper or other bash startup behavior. When you pass a pipeline path, Doctor now also reports whether `run` or `smoke` would auto-run the local preflight for that DAG and names the matching nodes and trigger sources, so you can confirm the guard rail from the same command. It also fails early when a pipeline node requires a provider API key such as `KIMI_API_KEY` or `ANTHROPIC_API_KEY` and that key is missing from the current environment, `node.env`, and `provider.env`.
+That keeps it easy to validate real Codex/Claude/Kimi DAGs before you launch them, especially when a node depends on a local `kimi` shell helper or other bash startup behavior. When you pass a pipeline path, Doctor now also reports whether `run` or `smoke` would auto-run the local preflight for that DAG and names the matching nodes and trigger sources, so you can confirm the guard rail from the same command. It also fails early when a pipeline node requires a provider API key such as `KIMI_API_KEY` or `ANTHROPIC_API_KEY` and that key is missing from the current environment, `node.env`, and `provider.env`, except when a local Claude-on-Kimi node already bootstraps those Anthropic credentials through `target.shell_init: kimi` or an equivalent `target.shell` wrapper.
 Add `--shell-bridge` when you want Doctor to include a ready-to-paste login-shell bridge snippet for `~/.bash_profile`, `~/.bash_login`, or `~/.profile`.
 
 Run the web console:
