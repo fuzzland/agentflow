@@ -8,6 +8,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
+_BASH_LOGIN_FILENAMES = (".bash_profile", ".bash_login", ".profile")
+
+
 @dataclass(frozen=True)
 class DoctorCheck:
     name: str
@@ -35,11 +38,46 @@ def _check_executable(name: str) -> DoctorCheck:
 
 
 def _bash_login_file(home: Path) -> Path | None:
-    for filename in (".bash_profile", ".bash_login", ".profile"):
+    for filename in _BASH_LOGIN_FILENAMES:
         candidate = home / filename
         if candidate.exists():
             return candidate
     return None
+
+
+def _bash_startup_chain_to_bashrc(
+    home: Path,
+    startup_file: Path,
+    seen: frozenset[str] = frozenset(),
+) -> tuple[str, ...] | None:
+    name = startup_file.name
+    if name in seen:
+        return None
+
+    text = startup_file.read_text(encoding="utf-8", errors="ignore")
+    if ".bashrc" in text:
+        return (name, ".bashrc")
+
+    next_seen = seen | {name}
+    for filename in _BASH_LOGIN_FILENAMES:
+        if filename == name or filename in next_seen:
+            continue
+        candidate = home / filename
+        if not candidate.exists() or filename not in text:
+            continue
+        chain = _bash_startup_chain_to_bashrc(home, candidate, next_seen)
+        if chain is not None:
+            return (name, *chain)
+    return None
+
+
+def _format_bash_startup_paths(paths: tuple[str, ...]) -> str:
+    formatted = [f"`~/{path}`" for path in paths]
+    if len(formatted) == 1:
+        return formatted[0]
+    if len(formatted) == 2:
+        return f"{formatted[0]} and {formatted[1]}"
+    return f"{', '.join(formatted[:-1])}, and {formatted[-1]}"
 
 
 def _check_bash_login_startup(home: Path) -> DoctorCheck:
@@ -51,17 +89,28 @@ def _check_bash_login_startup(home: Path) -> DoctorCheck:
             detail="No `~/.bash_profile`, `~/.bash_login`, or `~/.profile` was found for bash login shells.",
         )
 
-    text = login_file.read_text(encoding="utf-8", errors="ignore")
-    if ".bashrc" in text:
+    chain = _bash_startup_chain_to_bashrc(home, login_file)
+    if chain is None:
+        return DoctorCheck(
+            name="bash_login_startup",
+            status="warning",
+            detail=f"Bash login shells use `~/{login_file.name}`, but it does not reference `~/.bashrc`.",
+        )
+
+    if len(chain) == 2:
         return DoctorCheck(
             name="bash_login_startup",
             status="ok",
             detail=f"Bash login shells use `~/{login_file.name}`, and it references `~/.bashrc`.",
         )
+
     return DoctorCheck(
         name="bash_login_startup",
-        status="warning",
-        detail=f"Bash login shells use `~/{login_file.name}`, but it does not reference `~/.bashrc`.",
+        status="ok",
+        detail=(
+            f"Bash login shells use `~/{login_file.name}`, and it reaches `~/.bashrc` "
+            f"via {_format_bash_startup_paths(chain[1:-1])}."
+        ),
     )
 
 
