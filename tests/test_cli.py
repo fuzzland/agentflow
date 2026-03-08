@@ -2414,6 +2414,34 @@ print(json.dumps({\"exit_code\": result.exit_code, \"stdout\": result.stdout}))
     }
 
 
+def test_run_command_executes_local_kimi_node_when_pipeline_lives_outside_repo(tmp_path, monkeypatch):
+    pipeline_path = tmp_path / "kimi-only.yaml"
+    pipeline_path.write_text(
+        """name: kimi-only
+working_dir: .
+nodes:
+  - id: review
+    agent: kimi
+    prompt: |
+      Reply with exactly: kimi ok
+    timeout_seconds: 30
+    success_criteria:
+      - kind: output_contains
+        value: kimi ok
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AGENTFLOW_KIMI_MOCK_RESPONSE", "kimi ok")
+
+    result = runner.invoke(app, ["run", str(pipeline_path), "--output", "summary"])
+
+    assert result.exit_code == 0
+    assert "Run " in result.stdout
+    assert "Pipeline: kimi-only" in result.stdout
+    assert "review [kimi]: completed" in result.stdout
+    assert "kimi ok" in result.stdout
+
+
 def test_smoke_stops_when_bundled_preflight_fails(monkeypatch):
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report(status="failed", detail="missing"))
     monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: "examples/local-real-agents-kimi-smoke.yaml")
