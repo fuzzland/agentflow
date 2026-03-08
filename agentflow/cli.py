@@ -96,6 +96,57 @@ def _node_attempt_count(node: object) -> int:
     return current_attempt or len(attempts)
 
 
+def _provider_name(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        name = value.get("name")
+        return str(name) if name else None
+    name = getattr(value, "name", None)
+    if name:
+        return str(name)
+    if hasattr(value, "model_dump"):
+        data = value.model_dump(mode="json")
+        if isinstance(data, dict):
+            name = data.get("name")
+            if name:
+                return str(name)
+    return None
+
+
+def _pipeline_node_map(record: object) -> dict[str, object]:
+    pipeline_nodes = getattr(getattr(record, "pipeline", None), "nodes", None) or []
+    return {
+        node_id: node
+        for node in pipeline_nodes
+        if (node_id := getattr(node, "id", None))
+    }
+
+
+def _node_identity(node_id: str, pipeline_node: object | None) -> str:
+    if pipeline_node is None:
+        return node_id
+
+    parts: list[str] = []
+    agent = getattr(pipeline_node, "agent", None)
+    if agent is not None:
+        parts.append(_status_value(agent))
+
+    model = getattr(pipeline_node, "model", None)
+    if model:
+        parts.append(f"model={model}")
+
+    provider = _provider_name(getattr(pipeline_node, "provider", None))
+    if provider:
+        parts.append(f"provider={provider}")
+
+    if not parts:
+        return node_id
+    return f"{node_id} [{', '.join(parts)}]"
+
+
 def _node_preview(node: object) -> str | None:
     for candidate in (getattr(node, "final_response", None), getattr(node, "output", None)):
         preview = _preview_text(candidate)
@@ -118,10 +169,12 @@ def _render_run_summary(record: object, run_dir: Path | str | None = None) -> st
     if run_dir is not None:
         lines.append(f"Run dir: {run_dir}")
     nodes = getattr(record, "nodes", {}) or {}
+    pipeline_nodes = _pipeline_node_map(record)
     if nodes:
         lines.append("Nodes:")
         for node_id, node in nodes.items():
-            summary = f"{node_id}: {_status_value(getattr(node, 'status', 'unknown'))}"
+            identity = _node_identity(node_id, pipeline_nodes.get(node_id))
+            summary = f"{identity}: {_status_value(getattr(node, 'status', 'unknown'))}"
             metadata: list[str] = []
             attempts = _node_attempt_count(node)
             if attempts:

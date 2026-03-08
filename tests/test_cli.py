@@ -37,11 +37,12 @@ def _completed_run(
     pipeline_name: str = "demo",
     status: str = "completed",
     nodes: dict[str, object] | None = None,
+    pipeline_nodes: list[object] | None = None,
 ):
     return SimpleNamespace(
         id=run_id,
         status=SimpleNamespace(value=status),
-        pipeline=SimpleNamespace(name=pipeline_name),
+        pipeline=SimpleNamespace(name=pipeline_name, nodes=pipeline_nodes or []),
         started_at="2026-03-08T04:11:03+00:00",
         finished_at="2026-03-08T04:11:10+00:00",
         nodes=nodes or {},
@@ -298,6 +299,14 @@ def test_run_supports_summary_output(monkeypatch):
             return _completed_run(
                 run_id,
                 pipeline_name="summary-pipeline",
+                pipeline_nodes=[
+                    SimpleNamespace(
+                        id="codex_plan",
+                        agent=SimpleNamespace(value="codex"),
+                        model="gpt-5-codex",
+                        provider=None,
+                    )
+                ],
                 nodes={
                     "codex_plan": SimpleNamespace(
                         status=SimpleNamespace(value="completed"),
@@ -320,7 +329,7 @@ def test_run_supports_summary_output(monkeypatch):
     assert "Run run-summary: completed" in result.stdout
     assert "Pipeline: summary-pipeline" in result.stdout
     assert "Run dir: .agentflow/runs/run-summary" in result.stdout
-    assert "- codex_plan: completed (attempt 1, exit 0) - codex ok" in result.stdout
+    assert "- codex_plan [codex, model=gpt-5-codex]: completed (attempt 1, exit 0) - codex ok" in result.stdout
 
 
 def test_smoke_uses_bundled_pipeline_by_default(monkeypatch):
@@ -340,6 +349,20 @@ def test_smoke_uses_bundled_pipeline_by_default(monkeypatch):
             return _completed_run(
                 run_id,
                 pipeline_name="local-real-agents-kimi-smoke",
+                pipeline_nodes=[
+                    SimpleNamespace(
+                        id="codex_plan",
+                        agent=SimpleNamespace(value="codex"),
+                        model=None,
+                        provider=None,
+                    ),
+                    SimpleNamespace(
+                        id="claude_review",
+                        agent=SimpleNamespace(value="claude"),
+                        model=None,
+                        provider="kimi",
+                    ),
+                ],
                 nodes={
                     "codex_plan": SimpleNamespace(
                         status=SimpleNamespace(value="completed"),
@@ -378,8 +401,8 @@ def test_smoke_uses_bundled_pipeline_by_default(monkeypatch):
     assert result.exit_code == 0
     assert "Run smoke-123: completed" in result.stdout
     assert "Pipeline: local-real-agents-kimi-smoke" in result.stdout
-    assert "- codex_plan: completed (attempt 1, exit 0) - codex ok" in result.stdout
-    assert "- claude_review: completed (attempt 1, exit 0) - claude ok" in result.stdout
+    assert "- codex_plan [codex]: completed (attempt 1, exit 0) - codex ok" in result.stdout
+    assert "- claude_review [claude, provider=kimi]: completed (attempt 1, exit 0) - claude ok" in result.stdout
     assert captured["loaded_path"] == "examples/local-real-agents-kimi-smoke.yaml"
     assert captured["runs_dir"] == "/tmp/agentflow-smoke-runs"
     assert captured["max_concurrent_runs"] == 5
