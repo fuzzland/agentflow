@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -12,6 +13,39 @@ _BASH_LOGIN_FILENAMES = (".bash_profile", ".bash_login", ".profile")
 _KIMI_HELPER_MISSING_EXIT_CODE = 11
 _CLAUDE_IN_SHELL_MISSING_EXIT_CODE = 12
 _KIMI_API_KEY_MISSING_EXIT_CODE = 13
+
+
+def _strip_shell_comments(line: str) -> str:
+    quote: str | None = None
+    escaped = False
+    result: list[str] = []
+    for char in line:
+        if escaped:
+            result.append(char)
+            escaped = False
+            continue
+        if char == "\\" and quote != "'":
+            result.append(char)
+            escaped = True
+            continue
+        if char in {'"', "'"}:
+            result.append(char)
+            if quote == char:
+                quote = None
+            elif quote is None:
+                quote = char
+            continue
+        if char == "#" and quote is None:
+            break
+        result.append(char)
+    return "".join(result)
+
+
+def _shell_sources_file(text: str, filename: str) -> bool:
+    pattern = re.compile(
+        rf'(^|[\s;()])(?:source|\.)\s+["\']?(?:(?:\$HOME|\$\{{HOME\}}|~)/)?{re.escape(filename)}["\']?(?=$|[\s;()])'
+    )
+    return any(pattern.search(_strip_shell_comments(line)) for line in text.splitlines())
 
 
 @dataclass(frozen=True)
@@ -72,7 +106,7 @@ def _bash_startup_chain_to_bashrc(
         return None
 
     text = startup_file.read_text(encoding="utf-8", errors="ignore")
-    if ".bashrc" in text:
+    if _shell_sources_file(text, ".bashrc"):
         return (name, ".bashrc")
 
     next_seen = seen | {name}
@@ -80,7 +114,7 @@ def _bash_startup_chain_to_bashrc(
         if filename == name or filename in next_seen:
             continue
         candidate = home / filename
-        if not candidate.exists() or filename not in text:
+        if not candidate.exists() or not _shell_sources_file(text, filename):
             continue
         chain = _bash_startup_chain_to_bashrc(home, candidate, next_seen)
         if chain is not None:
