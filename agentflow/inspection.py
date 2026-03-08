@@ -19,7 +19,7 @@ from agentflow.agents.registry import AdapterRegistry, default_adapter_registry
 from agentflow.context import render_node_prompt
 from agentflow.prepared import build_execution_paths
 from agentflow.runners.registry import RunnerRegistry, default_runner_registry
-from agentflow.specs import AgentKind, NodeResult, NodeSpec, NodeStatus, PipelineSpec, provider_uses_kimi_anthropic_auth, resolve_provider
+from agentflow.specs import AgentKind, NodeResult, NodeSpec, NodeStatus, PipelineSpec, provider_uses_kimi_anthropic_auth, resolve_execution_provider
 from agentflow.utils import looks_sensitive_key, redact_sensitive_shell_text, redact_sensitive_shell_value
 
 _REDACTED = "<redacted>"
@@ -175,11 +175,9 @@ def _has_nonempty_env_value(env: object, key: str) -> bool:
 
 
 def _resolved_auth_requirement(node: NodeSpec) -> tuple[str | None, str | None]:
-    resolved_provider = resolve_provider(node.provider, node.agent)
+    resolved_provider = resolve_execution_provider(node.provider, node.agent)
     if resolved_provider is not None and resolved_provider.api_key_env:
         return resolved_provider.api_key_env, resolved_provider.name
-    if node.agent == AgentKind.KIMI:
-        return "KIMI_API_KEY", "moonshot"
     if node.agent == AgentKind.CODEX:
         return "OPENAI_API_KEY", "openai"
     return None, None
@@ -487,7 +485,7 @@ def build_launch_inspection(
 
         prompt, render_error = _render_prompt_for_inspection(pipeline, node, placeholder_results)
         uses_placeholder_results = uses_placeholder_results or _prompt_uses_placeholder_results(prompt)
-        resolved_provider = resolve_provider(node.provider, node.agent)
+        resolved_provider = resolve_execution_provider(node.provider, node.agent)
         paths = build_execution_paths(
             base_dir=base_dir,
             pipeline_workdir=pipeline.working_path,

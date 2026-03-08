@@ -145,6 +145,19 @@ def resolve_provider(value: str | ProviderConfig | None, agent: AgentKind) -> Pr
     return ProviderConfig(name=value)
 
 
+def resolve_execution_provider(value: str | ProviderConfig | None, agent: AgentKind) -> ProviderConfig | None:
+    provider = resolve_provider(value, agent)
+    if provider is not None:
+        return provider
+    if agent == AgentKind.KIMI:
+        return ProviderConfig(
+            name="moonshot",
+            base_url="https://api.moonshot.ai/v1",
+            api_key_env="KIMI_API_KEY",
+        )
+    return None
+
+
 class MCPServerSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

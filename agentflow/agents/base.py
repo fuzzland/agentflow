@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from agentflow.prepared import ExecutionPaths, PreparedExecution
-from agentflow.specs import AgentKind, NodeSpec, ProviderConfig, resolve_provider
+from agentflow.specs import AgentKind, NodeSpec, ProviderConfig, resolve_execution_provider
 
 
 class AgentAdapter(ABC):
@@ -14,7 +14,7 @@ class AgentAdapter(ABC):
         raise NotImplementedError
 
     def provider_config(self, value: str | ProviderConfig | None, agent: AgentKind) -> ProviderConfig | None:
-        return resolve_provider(value, agent)
+        return resolve_execution_provider(value, agent)
 
     def merge_env(self, *parts: dict[str, str]) -> dict[str, str]:
         merged: dict[str, str] = {}
