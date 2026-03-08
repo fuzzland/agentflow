@@ -28,9 +28,12 @@ def _safe_path(working_dir: Path, requested: str, *, write: bool = False) -> Pat
     path = Path(requested).expanduser()
     if not path.is_absolute():
         path = working_dir / path
+    root = working_dir.resolve()
     resolved = path.resolve()
-    if not str(resolved).startswith(str(working_dir.resolve())):
-        raise ValueError(f"path escapes working dir: {requested}")
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"path escapes working dir: {requested}") from exc
     if write:
         resolved.parent.mkdir(parents=True, exist_ok=True)
     return resolved
@@ -156,7 +159,12 @@ def _execute_tool(name: str, arguments: dict[str, Any], working_dir: Path) -> st
             path = _safe_path(working_dir, arguments.get("path", "."))
             return "\n".join(sorted(entry.name for entry in path.iterdir()))
         case "glob":
-            return "\n".join(sorted(str(path.relative_to(working_dir)) for path in working_dir.glob(arguments["pattern"])))
+            root = working_dir.resolve()
+            matches: list[str] = []
+            for path in working_dir.glob(arguments["pattern"]):
+                resolved = _safe_path(working_dir, str(path))
+                matches.append(str(resolved.relative_to(root)))
+            return "\n".join(sorted(matches))
         case "grep":
             regex = re.compile(arguments["pattern"])
             base = _safe_path(working_dir, arguments.get("path", "."))
