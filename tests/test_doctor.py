@@ -102,3 +102,38 @@ def test_local_smoke_doctor_report_checks_kimi_helper_in_supplied_home(tmp_path:
         "status": "ok",
         "detail": "`kimi` is available in `bash -lic` for the bundled smoke pipeline.",
     }
+
+
+def test_local_smoke_doctor_report_fails_when_bash_cannot_launch(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (home / ".bashrc").write_text("kimi(){ :; }\n", encoding="utf-8")
+
+    monkeypatch.setattr("agentflow.doctor.shutil.which", lambda name: f"/tmp/{name}")
+
+    def fake_run(*args, **kwargs):
+        raise FileNotFoundError("bash not found")
+
+    monkeypatch.setattr("agentflow.doctor.subprocess.run", fake_run)
+
+    report = build_local_smoke_doctor_report(home=home)
+
+    assert report.status == "failed"
+    assert report.as_dict() == {
+        "status": "failed",
+        "checks": [
+            {"name": "codex", "status": "ok", "detail": "Found `codex` at `/tmp/codex`."},
+            {"name": "claude", "status": "ok", "detail": "Found `claude` at `/tmp/claude`."},
+            {
+                "name": "bash_login_startup",
+                "status": "ok",
+                "detail": "Bash login shells use `~/.profile`, and it references `~/.bashrc`.",
+            },
+            {
+                "name": "kimi_shell_helper",
+                "status": "failed",
+                "detail": "Could not launch `bash -lic` to verify `kimi`: bash not found",
+            },
+        ],
+    }
