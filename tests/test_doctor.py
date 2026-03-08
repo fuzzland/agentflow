@@ -519,3 +519,71 @@ def test_local_smoke_doctor_report_fails_when_bash_cannot_launch(tmp_path: Path,
             },
         ],
     }
+
+
+def test_local_smoke_doctor_report_redacts_sensitive_unknown_kimi_stderr(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (home / ".bashrc").write_text("kimi(){ :; }\n", encoding="utf-8")
+
+    monkeypatch.setattr("agentflow.doctor.shutil.which", lambda name: f"/tmp/{name}")
+    monkeypatch.setattr(
+        "agentflow.doctor.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0],
+            returncode=1,
+            stdout="",
+            stderr=(
+                "bash: cannot set terminal process group (1234): Inappropriate ioctl for device\n"
+                "bash: no job control in this shell\n"
+                "export ANTHROPIC_API_KEY=super-secret\n"
+                "Authorization: Bearer top-secret\n"
+                "kimi bootstrap failed\n"
+            ),
+        ),
+    )
+
+    report = build_local_smoke_doctor_report(home=home)
+
+    assert report.status == "failed"
+    assert report.as_dict()["checks"][-1] == {
+        "name": "kimi_shell_helper",
+        "status": "failed",
+        "detail": "`kimi` failed inside `bash -lic`: export ANTHROPIC_API_KEY=<redacted>\nAuthorization: <redacted>\nkimi bootstrap failed",
+    }
+
+
+def test_local_smoke_doctor_report_redacts_sensitive_unknown_codex_stderr(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (home / ".bashrc").write_text("kimi(){ :; }\n", encoding="utf-8")
+
+    def fake_which(name: str):
+        if name == "claude":
+            return "/tmp/claude"
+        return None
+
+    def fake_run(*args, **kwargs):
+        command = args[0]
+        if command[:2] == ["bash", "-lic"] and "type codex" in command[2]:
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=1,
+                stdout="",
+                stderr='OPENAI_API_KEY="super-secret"\n',
+            )
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("agentflow.doctor.shutil.which", fake_which)
+    monkeypatch.setattr("agentflow.doctor.subprocess.run", fake_run)
+
+    report = build_local_smoke_doctor_report(home=home)
+
+    assert report.status == "failed"
+    assert report.as_dict()["checks"][0] == {
+        "name": "codex",
+        "status": "failed",
+        "detail": "`codex` is not on PATH, and `bash -lic` failed while looking for it: OPENAI_API_KEY=<redacted>",
+    }
