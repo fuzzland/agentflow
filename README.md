@@ -99,6 +99,7 @@ Add `--show-preflight` when you want `smoke` to print the successful local readi
 
 The bundled smoke preflight now matches that output mode too, so warning and failure reports stay in summary form by default and switch to JSON when you pass `--output json`.
 When those preflight checks detect a bash login startup bridge problem, the same smoke or run command now includes the ready-to-paste shell bridge recommendation inline instead of making you rerun Doctor separately.
+When that preflight loads the bundled smoke pipeline, it now also applies the same per-node shell-bootstrap and local agent readiness checks that custom Kimi-backed pipelines already use, so edits to the bundled example are still validated before launch.
 In the default `auto` mode, AgentFlow runs that preflight for the bundled smoke path, for explicit references to the bundled smoke file, and for custom local smoke pipelines that clearly bootstrap local Codex, Claude, or Kimi nodes through `kimi` in their local shell target. `agentflow run` now uses the same guard rails for those same pipeline shapes. Use `--preflight always` to force the same checks for other custom smoke pipelines, or `--preflight never` when you need to skip them.
 
 Check the local Codex/Claude/Kimi smoke prerequisites without launching a run:
@@ -108,6 +109,7 @@ agentflow doctor
 ```
 
 `agentflow doctor` now defaults to `summary` when stdout is a terminal, which makes local readiness checks easier to scan. It still defaults to JSON when stdout is redirected or piped so CI and wrapper scripts can parse it directly, and you can always force either mode with `--output summary` or `--output json`. `doctor` also accepts `--output json-summary`, which currently emits the same structured payload as `json` so wrappers can reuse one machine-readable flag across `inspect`, `doctor`, `run`, `smoke`, and `check-local`. When you pass a custom pipeline path that is not the bundled smoke example and does not use a local `kimi` shell bootstrap, `doctor` now skips the bundled smoke-only helper checks so Codex-only or Claude-only local DAGs are not blocked by unrelated Kimi prerequisites.
+Plain `agentflow doctor` now also loads the bundled smoke pipeline and applies those same node-level shell/bootstrap checks, not just the shared host-level helper checks, so the default smoke example stays self-validating.
 Those JSON checks also include per-check `context` when AgentFlow can explain a machine-readable cause, such as the node id and resolved values behind a `launch_env_override` report.
 For the bundled smoke pipeline and custom local Kimi-bootstrapped Codex/Claude/Kimi DAGs, Doctor now also reports when the current shell exports conflicting launch values such as `ANTHROPIC_BASE_URL` that a node will replace at launch, and it carries the same source hint into the human summary and JSON context. Overrides that come directly from explicit pipeline configuration such as `node.env`, `provider.env`, or `provider.base_url` stay informational in Doctor so the preflight does not go yellow for an intentional mixed-provider setup.
 
