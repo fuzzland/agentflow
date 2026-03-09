@@ -7857,5 +7857,6 @@ def test_smoke_failed_preflight_honors_json_summary_output(monkeypatch):
     assert result.exit_code == 1
     assert json.loads(result.stdout) == {
         "status": "failed",
+        "counts": {"ok": 0, "warning": 0, "failed": 1},
         "checks": [{"name": "kimi_shell_helper", "status": "failed", "detail": "missing"}],
     }
