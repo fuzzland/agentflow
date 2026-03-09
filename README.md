@@ -64,6 +64,7 @@ Use `--output json-summary` when you want the same compact information in a mach
 For Kimi nodes, that inspect output also surfaces the effective default Moonshot provider even when you omit `provider:` from the pipeline, so the expected `KIMI_API_KEY` and base URL are visible before launch.
 When a node launch will override current shell values such as `ANTHROPIC_BASE_URL` or `OPENAI_API_KEY`, that JSON summary also includes a structured `launch_env_overrides` list per node, including the override source, so wrappers can react without scraping warning text. Base-URL values are included verbatim; secret-like keys stay redacted.
 That override summary also treats explicit empty-string base-URL values as intentional clears, so bundled smoke configs can show when they wipe an ambient relay such as `OPENAI_BASE_URL` before launch.
+For local Claude-on-Kimi nodes in mixed-provider shells, that same summary now also includes `bootstrap_env_overrides` when the `kimi` helper will replace the current `ANTHROPIC_API_KEY` after the node switches away from another Anthropic-compatible base URL, so hidden auth shadowing is easier to spot before execution.
 For local Codex or Claude nodes that still do not pin base-url routing explicitly, the same summary now also includes `launch_env_inheritances` when the launch will inherit an ambient `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL` from the current shell, even if you supplied a structured provider that sets auth but omits `base_url`, so hidden routing drift is visible before you run the DAG.
 
 Run a pipeline once:
@@ -132,6 +133,7 @@ Plain `agentflow doctor` now also loads the bundled smoke pipeline and applies t
 Those JSON checks also include per-check `context` when AgentFlow can explain a machine-readable cause, such as the node id and resolved values behind a `launch_env_override` report.
 For bash login startup checks, that same JSON context now includes the active login file, `startup_chain`, `startup_summary`, and any `shadowed_startup_chain`, while the human summary appends the same startup chain inline as `startup=~/.profile -> ~/.bashrc` so `doctor`, `check-local`, and `make toolchain-local` stay easier to compare.
 For the bundled smoke pipeline and custom local Kimi-bootstrapped Codex/Claude/Kimi DAGs, Doctor now also reports when the current shell exports conflicting launch values such as `ANTHROPIC_BASE_URL` that a node will replace at launch, and it carries the same source hint into the human summary and JSON context. Overrides that come directly from explicit pipeline configuration such as `node.env`, `provider.env`, or `provider.base_url` stay informational in Doctor so the preflight does not go yellow for an intentional mixed-provider setup.
+In that same mixed-provider Claude-on-Kimi case, Doctor also emits a `bootstrap_env_override` info check when the local `kimi` helper will replace the current `ANTHROPIC_API_KEY` after the node switches to Kimi's Anthropic-compatible base URL.
 
 You can also point Doctor at a custom pipeline to surface the same pipeline-specific local shell bootstrap warnings that `run` and `smoke` preflight use:
 
