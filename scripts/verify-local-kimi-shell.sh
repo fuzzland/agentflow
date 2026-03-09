@@ -96,10 +96,12 @@ for codex_auth_source in "${codex_auth_sources[@]:1}"; do
   codex_auth_label="${codex_auth_label} + ${codex_auth_source}"
 done
 printf "codex auth: %s\n" "$codex_auth_label"
-printf "codex: "
-codex --version
-printf "claude: "
-claude --version
+codex_path="$(command -v codex)"
+claude_path="$(command -v claude)"
+codex_version="$(codex --version 2>&1 | head -n 1)"
+claude_version="$(claude --version 2>&1 | head -n 1)"
+printf "codex: %s (%s)\n" "$codex_path" "$codex_version"
+printf "claude: %s (%s)\n" "$claude_path" "$claude_version"
 ' 2> >(
   grep -v \
     -e '^bash: cannot set terminal process group (' \

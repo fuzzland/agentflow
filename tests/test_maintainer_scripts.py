@@ -97,8 +97,8 @@ def test_verify_local_kimi_shell_script_reports_bash_profile_startup_when_presen
     assert "bash login bridge: not needed" in completed.stdout
     assert "ANTHROPIC_BASE_URL=https://api.kimi.com/coding/" in completed.stdout
     assert "codex auth: login" in completed.stdout
-    assert "codex: codex-cli 0.0.0" in completed.stdout
-    assert "claude: Claude Code 0.0.0" in completed.stdout
+    assert f"codex: {home / 'bin' / 'codex'} (codex-cli 0.0.0)" in completed.stdout
+    assert f"claude: {home / 'bin' / 'claude'} (Claude Code 0.0.0)" in completed.stdout
     assert completed.stderr == ""
 
 
