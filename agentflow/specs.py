@@ -454,6 +454,25 @@ def _local_target_defaults_payload(value: Any) -> dict[str, Any] | None:
     return payload
 
 
+def _target_disables_inherited_bootstrap(target_payload: dict[str, Any]) -> bool:
+    if "bootstrap" not in target_payload:
+        return False
+    return _normalize_local_bootstrap(target_payload.get("bootstrap")) is None
+
+
+def _drop_inherited_bootstrap_defaults(local_target_defaults: dict[str, Any]) -> dict[str, Any]:
+    inherited = dict(local_target_defaults)
+    bootstrap = _normalize_local_bootstrap(inherited.get("bootstrap"))
+    if bootstrap is None:
+        return inherited
+
+    inherited.pop("bootstrap", None)
+    for key, value in _local_bootstrap_defaults(bootstrap).items():
+        if inherited.get(key) == value:
+            inherited.pop(key, None)
+    return inherited
+
+
 def apply_local_target_defaults(payload: dict[str, Any]) -> dict[str, Any]:
     resolved = dict(payload)
     local_target_defaults = _local_target_defaults_payload(resolved.get("local_target_defaults"))
@@ -486,7 +505,11 @@ def apply_local_target_defaults(payload: dict[str, Any]) -> dict[str, Any]:
             merged_nodes.append(updated_node)
             continue
 
-        merged_target = dict(local_target_defaults)
+        merged_target = (
+            _drop_inherited_bootstrap_defaults(local_target_defaults)
+            if _target_disables_inherited_bootstrap(target_payload)
+            else dict(local_target_defaults)
+        )
         merged_target.update(target_payload)
         updated_node["target"] = merged_target
         merged_nodes.append(updated_node)
