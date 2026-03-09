@@ -7,6 +7,7 @@ from typing import Any
 
 from agentflow.doctor import build_bash_login_shell_bridge_recommendation
 from agentflow.local_shell import (
+    target_bash_login_startup_file_statuses,
     kimi_shell_init_requires_bash_warning,
     kimi_shell_init_requires_interactive_bash_warning,
     render_shell_init,
@@ -1010,6 +1011,9 @@ def build_launch_inspection(
         bootstrap_home = _bootstrap_home(node_plan["target"], prepared.env, cwd=prepared.cwd)
         if bootstrap_home:
             node_plan["bootstrap_home"] = bootstrap_home
+        bash_startup_files = target_bash_login_startup_file_statuses(node.target, env=prepared.env, cwd=prepared.cwd)
+        if bash_startup_files:
+            node_plan["bash_startup_files"] = bash_startup_files
         shell_bridge = _target_shell_bridge(
             node_plan["target"],
             prepared.env,
@@ -1129,6 +1133,9 @@ def build_launch_inspection_summary(report: dict[str, Any]) -> dict[str, Any]:
         bootstrap_home = node.get("bootstrap_home")
         if bootstrap_home:
             node_summary["bootstrap_home"] = bootstrap_home
+        bash_startup_files = node.get("bash_startup_files")
+        if bash_startup_files:
+            node_summary["bash_startup_files"] = dict(bash_startup_files)
         shell_bridge = node.get("shell_bridge")
         if shell_bridge:
             node_summary["shell_bridge"] = dict(shell_bridge)
@@ -1231,6 +1238,10 @@ def render_launch_inspection_summary(report: dict[str, Any]) -> str:
         bootstrap_home = node.get("bootstrap_home")
         if bootstrap_home:
             lines.append(f"  Bootstrap home: {bootstrap_home}")
+        bash_startup_files = node.get("bash_startup_files")
+        if bash_startup_files:
+            rendered_files = ", ".join(f"{path}={status}" for path, status in bash_startup_files.items())
+            lines.append(f"  Startup files: {rendered_files}")
         prompt_preview = node.get("rendered_prompt_preview")
         if prompt_preview:
             lines.append(f"  Prompt: {prompt_preview}")

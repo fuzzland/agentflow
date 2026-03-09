@@ -1928,6 +1928,47 @@ def target_bash_login_startup_file(
     return f"~/{startup_file.relative_to(resolved_home).as_posix()}"
 
 
+def bash_login_startup_file_statuses(home: Path) -> dict[str, str]:
+    resolved_home = home.resolve()
+    return {
+        f"~/{filename}": ("present" if (resolved_home / filename).exists() else "missing")
+        for filename in _BASH_LOGIN_FILENAMES
+    }
+
+
+def summarize_bash_login_startup_file_statuses(home: Path) -> str:
+    return ", ".join(f"{path}={status}" for path, status in bash_login_startup_file_statuses(home).items())
+
+
+def target_bash_login_startup_file_statuses(
+    target: Any,
+    *,
+    home: Path | None = None,
+    env: dict[str, str] | None = None,
+    cwd: Path | str | None = None,
+) -> dict[str, str] | None:
+    if not target_uses_login_bash(target):
+        return None
+    if target_disables_bash_login_startup(target):
+        return None
+
+    resolved_home = target_bash_home(target, home=home, env=env, cwd=cwd)
+    return bash_login_startup_file_statuses(resolved_home)
+
+
+def summarize_target_bash_login_startup_files(
+    target: Any,
+    *,
+    home: Path | None = None,
+    env: dict[str, str] | None = None,
+    cwd: Path | str | None = None,
+) -> str | None:
+    statuses = target_bash_login_startup_file_statuses(target, home=home, env=env, cwd=cwd)
+    if statuses is None:
+        return None
+    return ", ".join(f"{path}={status}" for path, status in statuses.items())
+
+
 def target_bash_login_startup_chain(
     target: Any,
     *,

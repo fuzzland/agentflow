@@ -86,4 +86,13 @@ nodes:
         f"shell=env HOME={custom_home} bash, login=true, startup=~/.profile -> ~/.bashrc, interactive=true"
     )
     assert summary["nodes"][0]["bootstrap_home"] == str(custom_home.resolve())
+    assert summary["nodes"][0]["bash_startup_files"] == {
+        "~/.bash_profile": "missing",
+        "~/.bash_login": "missing",
+        "~/.profile": "present",
+    }
     assert f"Bootstrap home: {custom_home.resolve()}" in render_launch_inspection_summary(report)
+    assert (
+        "Startup files: ~/.bash_profile=missing, ~/.bash_login=missing, ~/.profile=present"
+        in render_launch_inspection_summary(report)
+    )

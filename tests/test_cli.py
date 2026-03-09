@@ -436,6 +436,7 @@ nodes:
     assert "Model: gpt-5" in result.stdout
     assert "Mode: tools=read_only, capture=final" in result.stdout
     assert "Bootstrap: shell=bash, login=true, startup=~/.profile -> ~/.bashrc, interactive=true, init=kimi" in result.stdout
+    assert "Startup files: ~/.bash_profile=missing, ~/.bash_login=missing, ~/.profile=present" in result.stdout
     assert "Launch: bash -l -i -c 'kimi && eval \"$AGENTFLOW_TARGET_COMMAND\"'" in result.stdout
     assert "Runtime files: codex_home/config.toml" in result.stdout
     assert "Prompt: Review this: <inspect placeholder for nodes.plan.output>" in result.stdout
@@ -671,6 +672,11 @@ nodes:
             "provider": "kimi, key=ANTHROPIC_API_KEY, url=https://api.kimi.com/coding/",
             "auth": "`ANTHROPIC_API_KEY` via `target.shell_init` (`kimi` helper)",
             "bootstrap": "shell=bash, login=true, startup=~/.profile -> ~/.bashrc, interactive=true, init=kimi",
+            "bash_startup_files": {
+                "~/.bash_profile": "missing",
+                "~/.bash_login": "missing",
+                "~/.profile": "present",
+            },
             "prompt_preview": "Reply with exactly: claude ok",
             "prepared_command": "claude -p 'Reply with exactly: claude ok' --output-format stream-json --verbose --permission-mode bypassPermissions --tools Read,Glob,Grep,LS,NotebookRead,Task,TaskOutput,TodoRead,WebFetch,WebSearch",
             "launch": "bash -l -i -c 'kimi && eval \"$AGENTFLOW_TARGET_COMMAND\"'",
