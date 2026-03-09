@@ -25,6 +25,7 @@ from agentflow.doctor import (
     build_local_smoke_doctor_report,
     build_pipeline_local_codex_auth_checks,
 )
+from agentflow.env import merge_env_layers
 from agentflow.local_shell import (
     kimi_shell_init_requires_bash_warning,
     kimi_shell_init_requires_interactive_bash_warning,
@@ -643,6 +644,12 @@ def _node_kimi_shell_bootstrap_check(node: object) -> DoctorCheck | None:
         return None
 
     node_id = str(getattr(node, "id", "node"))
+    agent = _status_value(getattr(node, "agent", None)).lower()
+    provider = None
+    if agent in {member.value for member in AgentKind}:
+        provider = resolve_provider(getattr(node, "provider", None), AgentKind(agent))
+    launch_env = merge_env_layers(getattr(provider, "env", None), getattr(node, "env", None))
+    effective_home = target_bash_home(target, env=launch_env)
 
     bash_warning = kimi_shell_init_requires_bash_warning(target)
     if bash_warning is not None:
@@ -652,7 +659,7 @@ def _node_kimi_shell_bootstrap_check(node: object) -> DoctorCheck | None:
             detail=f"Node `{node_id}`: {bash_warning}",
         )
 
-    interactive_warning = kimi_shell_init_requires_interactive_bash_warning(target)
+    interactive_warning = kimi_shell_init_requires_interactive_bash_warning(target, home=effective_home)
     if interactive_warning is not None:
         return DoctorCheck(
             name="kimi_shell_bootstrap",
@@ -775,7 +782,8 @@ def _provider_credentials_come_from_local_bootstrap(
 ) -> bool:
     target = _coerce_local_target(getattr(node, "target", None))
     if target is not None:
-        effective_home = target_bash_home(target)
+        launch_env = merge_env_layers(getattr(provider, "env", None), getattr(node, "env", None))
+        effective_home = target_bash_home(target, env=launch_env)
         shell_init = getattr(target, "shell_init", None)
         if shell_init_exports_env_var(shell_init, api_key_env, home=effective_home):
             return True
@@ -789,7 +797,7 @@ def _provider_credentials_come_from_local_bootstrap(
             return True
         if shell_command_prefixes_env_var(shell if isinstance(shell, str) else None, api_key_env):
             return True
-        if target_bash_startup_exports_env_var(target, api_key_env, home=effective_home):
+        if target_bash_startup_exports_env_var(target, api_key_env, home=effective_home, env=launch_env):
             return True
 
     if api_key_env == "ANTHROPIC_API_KEY" and provider_uses_kimi_anthropic_auth(provider):

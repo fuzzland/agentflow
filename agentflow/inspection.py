@@ -184,6 +184,16 @@ def _env_declares_key(env: object, key: str) -> bool:
     return isinstance(env, dict) and key in env
 
 
+def _local_launch_env(node: NodeSpec, resolved_provider: object) -> dict[str, str]:
+    env: dict[str, str] = {}
+    provider_env = getattr(resolved_provider, "env", None)
+    if isinstance(provider_env, dict):
+        env.update({str(key): str(value) for key, value in provider_env.items() if value is not None})
+    if isinstance(node.env, dict):
+        env.update({str(key): str(value) for key, value in node.env.items() if value is not None})
+    return env
+
+
 def _resolved_auth_requirement(node: NodeSpec) -> tuple[str | None, str | None]:
     resolved_provider = resolve_execution_provider(node.provider, node.agent)
     if resolved_provider is not None and resolved_provider.api_key_env:
@@ -250,7 +260,7 @@ def _bash_startup_auth_source_label(target: object) -> tuple[str, str] | None:
     return None
 
 
-def _auth_summary(node: NodeSpec, resolved_provider: object) -> str | None:
+def _auth_summary(node: NodeSpec, resolved_provider: object, launch_env: dict[str, str] | None = None) -> str | None:
     api_key_env, provider_name = _resolved_auth_requirement(node)
     if not api_key_env:
         return None
@@ -263,7 +273,7 @@ def _auth_summary(node: NodeSpec, resolved_provider: object) -> str | None:
         api_key_env == "ANTHROPIC_API_KEY" and provider_uses_kimi_anthropic_auth(resolved_provider)
     )
     if getattr(target, "kind", None) == "local":
-        effective_home = target_bash_home(target)
+        effective_home = target_bash_home(target, env=launch_env)
         shell_init = getattr(target, "shell_init", None)
         if shell_init_exports_env_var(shell_init, api_key_env, home=effective_home):
             explicit_bootstrap_source = ("`target.shell_init`", "target.shell_init")
@@ -282,7 +292,12 @@ def _auth_summary(node: NodeSpec, resolved_provider: object) -> str | None:
         if provider_uses_kimi_helper_auth or node.agent == AgentKind.CODEX:
             helper_bootstrap_source = _kimi_helper_bootstrap_source(target)
 
-        if helper_bootstrap_source is None and target_bash_startup_exports_env_var(target, api_key_env, home=effective_home):
+        if helper_bootstrap_source is None and target_bash_startup_exports_env_var(
+            target,
+            api_key_env,
+            home=effective_home,
+            env=launch_env,
+        ):
             bash_startup_source = _bash_startup_auth_source_label(target)
 
     if explicit_bootstrap_source is not None:
@@ -332,7 +347,7 @@ def _auth_summary(node: NodeSpec, resolved_provider: object) -> str | None:
     return f"expects `{api_key_env}` via {', '.join(expectation_sources[:-1])}, or {expectation_sources[-1]}"
 
 
-def _bootstrap_summary(target: dict[str, Any]) -> str | None:
+def _bootstrap_summary(target: dict[str, Any], launch_env: dict[str, str] | None = None) -> str | None:
     if target.get("kind") != "local":
         return None
 
@@ -349,7 +364,7 @@ def _bootstrap_summary(target: dict[str, Any]) -> str | None:
     if uses_login_bash:
         parts.append("login=true")
 
-    login_startup_chain = target_bash_login_startup_chain(target)
+    login_startup_chain = target_bash_login_startup_chain(target, env=launch_env)
     if login_startup_chain:
         parts.append(f"startup={' -> '.join(login_startup_chain)}")
     elif uses_login_bash:
@@ -367,10 +382,12 @@ def _bootstrap_summary(target: dict[str, Any]) -> str | None:
     return ", ".join(parts)
 
 
-def _target_warnings(target: dict[str, Any]) -> list[str]:
+def _target_warnings(target: dict[str, Any], launch_env: dict[str, str] | None = None) -> list[str]:
     warnings: list[str] = []
 
-    if target_uses_login_bash(target) and target_bash_login_startup_file(target) is None:
+    effective_home = target_bash_home(target, env=launch_env)
+
+    if target_uses_login_bash(target) and target_bash_login_startup_file(target, env=launch_env) is None:
         warnings.append(
             "Bash login startup will not load any user file from `HOME` because `~/.bash_profile`, "
             "`~/.bash_login`, and `~/.profile` are all missing."
@@ -380,7 +397,7 @@ def _target_warnings(target: dict[str, Any]) -> list[str]:
     if kimi_bash_warning:
         warnings.append(kimi_bash_warning)
 
-    kimi_warning = kimi_shell_init_requires_interactive_bash_warning(target)
+    kimi_warning = kimi_shell_init_requires_interactive_bash_warning(target, home=effective_home)
     if kimi_warning:
         warnings.append(kimi_warning)
 
@@ -673,9 +690,13 @@ def build_launch_inspection(
                 "payload": _sanitize_payload(launch.payload),
             },
         }
-        auth_summary = _auth_summary(node, resolved_provider)
+        launch_env = _local_launch_env(node, resolved_provider)
+        auth_summary = _auth_summary(node, resolved_provider, launch_env)
         if auth_summary:
             node_plan["auth"] = auth_summary
+        bootstrap_summary = _bootstrap_summary(node_plan["target"], prepared.env)
+        if bootstrap_summary:
+            node_plan["bootstrap"] = bootstrap_summary
         launch_env_overrides = _launch_env_override_details(node, resolved_provider, prepared.env)
         if launch_env_overrides:
             node_plan["launch_env_overrides"] = launch_env_overrides
@@ -683,7 +704,7 @@ def build_launch_inspection(
         if launch_env_inheritances:
             node_plan["launch_env_inheritances"] = launch_env_inheritances
         node_plan["warnings"] = (
-            _target_warnings(node_plan["target"])
+            _target_warnings(node_plan["target"], prepared.env)
             + _launch_env_override_warnings(node, resolved_provider, prepared.env)
             + _launch_env_inheritance_warnings(node, resolved_provider, prepared.env)
         )
@@ -762,7 +783,7 @@ def build_launch_inspection_summary(report: dict[str, Any]) -> dict[str, Any]:
         auth_summary = node.get("auth")
         if auth_summary:
             node_summary["auth"] = auth_summary
-        bootstrap_summary = _bootstrap_summary(node["target"])
+        bootstrap_summary = node.get("bootstrap")
         if bootstrap_summary:
             node_summary["bootstrap"] = bootstrap_summary
         prompt_preview = node.get("rendered_prompt_preview")
@@ -836,7 +857,7 @@ def render_launch_inspection_summary(report: dict[str, Any]) -> str:
         auth_summary = node.get("auth")
         if auth_summary:
             lines.append(f"  Auth: {auth_summary}")
-        bootstrap_summary = _bootstrap_summary(node["target"])
+        bootstrap_summary = node.get("bootstrap")
         if bootstrap_summary:
             lines.append(f"  Bootstrap: {bootstrap_summary}")
         prompt_preview = node.get("rendered_prompt_preview")

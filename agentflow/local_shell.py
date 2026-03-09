@@ -1234,12 +1234,27 @@ def target_uses_login_bash(target: Any) -> bool:
     return False
 
 
-def target_bash_home(target: Any, *, home: Path | None = None) -> Path:
+def target_bash_home(target: Any, *, home: Path | None = None, env: dict[str, str] | None = None) -> Path:
     shell = _target_value(target, "shell")
-    return _shell_command_effective_home_for_target(shell if isinstance(shell, str) else None, "bash", home=home)
+    effective_home = _resolved_home_path(home)
+    if isinstance(env, dict):
+        env_home = str(env.get("HOME", "")).strip()
+        if env_home:
+            effective_home = _resolve_shell_path(env_home, home=effective_home)
+    return _shell_command_effective_home_for_target(
+        shell if isinstance(shell, str) else None,
+        "bash",
+        home=effective_home,
+    )
 
 
-def target_bash_startup_exports_env_var(target: Any, env_var: str, *, home: Path | None = None) -> bool:
+def target_bash_startup_exports_env_var(
+    target: Any,
+    env_var: str,
+    *,
+    home: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> bool:
     if not env_var or not target_uses_bash(target):
         return False
 
@@ -1248,7 +1263,7 @@ def target_bash_startup_exports_env_var(target: Any, env_var: str, *, home: Path
     if not (uses_login_bash or uses_interactive_bash):
         return False
 
-    effective_home = target_bash_home(target, home=home)
+    effective_home = target_bash_home(target, home=home, env=env)
     env = os.environ.copy()
     env["HOME"] = str(effective_home)
 
@@ -1273,11 +1288,16 @@ def target_bash_startup_exports_env_var(target: Any, env_var: str, *, home: Path
     return result.returncode == 0
 
 
-def target_bash_login_startup_file(target: Any, *, home: Path | None = None) -> str | None:
+def target_bash_login_startup_file(
+    target: Any,
+    *,
+    home: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> str | None:
     if not target_uses_login_bash(target):
         return None
 
-    resolved_home = target_bash_home(target, home=home)
+    resolved_home = target_bash_home(target, home=home, env=env)
     startup_file = _bash_login_startup_file(resolved_home)
     if startup_file is None:
         return None
@@ -1285,11 +1305,16 @@ def target_bash_login_startup_file(target: Any, *, home: Path | None = None) -> 
     return f"~/{startup_file.relative_to(resolved_home).as_posix()}"
 
 
-def target_bash_login_startup_chain(target: Any, *, home: Path | None = None) -> tuple[str, ...] | None:
+def target_bash_login_startup_chain(
+    target: Any,
+    *,
+    home: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> tuple[str, ...] | None:
     if not target_uses_login_bash(target):
         return None
 
-    resolved_home = target_bash_home(target, home=home)
+    resolved_home = target_bash_home(target, home=home, env=env)
     startup_file = _bash_login_startup_file(resolved_home)
     if startup_file is None:
         return None

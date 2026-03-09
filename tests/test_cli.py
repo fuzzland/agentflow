@@ -1191,6 +1191,40 @@ nodes:
     assert payload["nodes"][0]["bootstrap"] == "shell=bash, login=true, startup=~/.bash_profile -> ~/.bashrc"
 
 
+def test_inspect_command_uses_node_env_home_for_login_startup_summary(tmp_path, monkeypatch):
+    host_home = tmp_path / "host-home"
+    host_home.mkdir()
+    (host_home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (host_home / ".bashrc").write_text("export READY=1\n", encoding="utf-8")
+    launch_home = tmp_path / "launch-home"
+    launch_home.mkdir()
+
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        f"""name: inspect-home-env-login-startup
+working_dir: .
+nodes:
+  - id: plan
+    agent: codex
+    prompt: hi
+    env:
+      HOME: {launch_home}
+    target:
+      kind: local
+      shell: bash
+      shell_login: true
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("agentflow.local_shell.Path.home", lambda: host_home)
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json-summary"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["nodes"][0]["bootstrap"] == "shell=bash, login=true, startup=none"
+
+
 def test_inspect_command_reports_auto_preflight_match_sources(tmp_path):
     pipeline_path = tmp_path / "pipeline.yaml"
     pipeline_path.write_text(
@@ -5053,6 +5087,62 @@ def test_doctor_with_pipeline_path_accepts_provider_credentials_from_login_shell
 
     assert result.exit_code == 0
     assert captured["loaded_path"] == "custom-smoke.yaml"
+    assert result.stdout == (
+        "Doctor: ok\n"
+        "Pipeline auto preflight: disabled - path does not match the bundled smoke pipeline and no local Codex/Claude/Kimi node uses `kimi` bootstrap.\n"
+    )
+
+
+def test_doctor_with_pipeline_path_accepts_provider_credentials_from_login_shell_startup_via_node_env_home(
+    monkeypatch,
+    tmp_path,
+):
+    captured: dict[str, object] = {}
+    launch_home = tmp_path / "launch-home"
+    launch_home.mkdir()
+    observed_commands: list[list[str]] = []
+    observed_envs: list[dict[str, str]] = []
+
+    def _run(*args, **kwargs):
+        command = list(args[0])
+        observed_commands.append(command)
+        observed_envs.append(dict(kwargs.get("env") or {}))
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0 if kwargs.get("env", {}).get("HOME") == str(launch_home) else 1,
+            stdout="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(subprocess, "run", _run)
+    fake_pipeline = SimpleNamespace(
+        nodes=[
+            SimpleNamespace(
+                id="claude_review",
+                agent=SimpleNamespace(value="claude"),
+                provider="anthropic",
+                env={"HOME": str(launch_home)},
+                executable=None,
+                target=SimpleNamespace(
+                    kind="local",
+                    shell="bash",
+                    shell_login=True,
+                    cwd=None,
+                ),
+            )
+        ],
+        working_path=Path.cwd(),
+    )
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", _capture_pipeline_loader(captured, fake_pipeline))
+
+    result = runner.invoke(app, ["doctor", "custom-smoke.yaml", "--output", "summary"])
+
+    assert result.exit_code == 0
+    assert captured["loaded_path"] == "custom-smoke.yaml"
+    assert ["bash", "-lc", 'test -n "${ANTHROPIC_API_KEY:-}"'] in observed_commands
+    assert any(env.get("HOME") == str(launch_home) for env in observed_envs)
     assert result.stdout == (
         "Doctor: ok\n"
         "Pipeline auto preflight: disabled - path does not match the bundled smoke pipeline and no local Codex/Claude/Kimi node uses `kimi` bootstrap.\n"
