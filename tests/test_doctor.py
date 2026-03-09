@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from agentflow.doctor import (
     DoctorCheck,
+    _CODEX_AUTH_VIA_API_KEY_AND_LOGIN_STATUS_EXIT_CODE,
     _CODEX_AUTH_VIA_API_KEY_EXIT_CODE,
     _CODEX_AUTH_VIA_LOGIN_STATUS_EXIT_CODE,
     _check_claude_executable,
@@ -327,6 +328,57 @@ def test_pipeline_local_codex_auth_info_checks_report_openai_api_key_source(monk
             detail=(
                 "Node `codex_plan` (codex) can authenticate local Codex after the node shell bootstrap via "
                 "`OPENAI_API_KEY`."
+            ),
+        )
+    ]
+
+
+def test_pipeline_local_codex_auth_info_checks_report_combined_auth_sources(monkeypatch):
+    pipeline = SimpleNamespace(
+        nodes=[
+            SimpleNamespace(
+                id="codex_plan",
+                agent=SimpleNamespace(value="codex"),
+                provider=None,
+                env={},
+                executable="custom-codex",
+                target=SimpleNamespace(
+                    kind="local",
+                    shell="bash",
+                    shell_login=True,
+                    shell_interactive=True,
+                    shell_init="kimi",
+                    cwd=None,
+                ),
+            )
+        ],
+        working_path=Path.cwd(),
+    )
+
+    def fake_run(*args, **kwargs):
+        env = kwargs.get("env") or {}
+        target_command = env.get("AGENTFLOW_TARGET_COMMAND", "")
+        if "custom-codex --version" in target_command:
+            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr="")
+        if "custom-codex" in target_command and "OPENAI_API_KEY" in target_command and "subprocess.run" in target_command:
+            return subprocess.CompletedProcess(
+                args=args[0],
+                returncode=_CODEX_AUTH_VIA_API_KEY_AND_LOGIN_STATUS_EXIT_CODE,
+                stdout="",
+                stderr="",
+            )
+        raise AssertionError(f"unexpected target command: {target_command}")
+
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-openai-key")
+    monkeypatch.setattr("agentflow.doctor.subprocess.run", fake_run)
+
+    assert build_pipeline_local_codex_auth_info_checks(pipeline) == [
+        DoctorCheck(
+            name="codex_auth",
+            status="ok",
+            detail=(
+                "Node `codex_plan` (codex) can authenticate local Codex after the node shell bootstrap via "
+                "`OPENAI_API_KEY` + `codex login status`."
             ),
         )
     ]
@@ -1678,7 +1730,12 @@ def test_local_smoke_doctor_report_accepts_openai_api_key_when_codex_login_statu
         command = args[0]
         if command[:2] == ["bash", "-lic"]:
             assert "codex --version >/dev/null 2>&1" in command[2]
-            assert f'[ -n "${{OPENAI_API_KEY:-}}" ] && exit {_CODEX_AUTH_VIA_API_KEY_EXIT_CODE}' in command[2]
+            assert 'if [ -n "${OPENAI_API_KEY:-}" ]; then ' in command[2]
+            assert (
+                f"codex login status >/dev/null 2>&1 && exit "
+                f"{_CODEX_AUTH_VIA_API_KEY_AND_LOGIN_STATUS_EXIT_CODE}; "
+                f"exit {_CODEX_AUTH_VIA_API_KEY_EXIT_CODE}; fi"
+            ) in command[2]
             assert f"codex login status >/dev/null 2>&1 && exit {_CODEX_AUTH_VIA_LOGIN_STATUS_EXIT_CODE}" in command[2]
         return subprocess.CompletedProcess(args=command, returncode=_CODEX_AUTH_VIA_API_KEY_EXIT_CODE, stdout="", stderr="")
 
@@ -1694,6 +1751,38 @@ def test_local_smoke_doctor_report_accepts_openai_api_key_when_codex_login_statu
             "`kimi` is available in `bash -lic`, exports `ANTHROPIC_API_KEY`, "
             "sets `ANTHROPIC_BASE_URL=https://api.kimi.com/coding/`, keeps both `claude` and `codex` available, "
             "and confirms Codex authentication is ready via `OPENAI_API_KEY` for the bundled smoke pipeline."
+        ),
+    }
+
+
+def test_local_smoke_doctor_report_accepts_combined_codex_auth_sources(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (home / ".bashrc").write_text("kimi(){ :; }\n", encoding="utf-8")
+
+    monkeypatch.setenv("OPENAI_API_KEY", "super-secret")
+    monkeypatch.setattr("agentflow.doctor.shutil.which", lambda name: f"/tmp/{name}")
+    monkeypatch.setattr(
+        "agentflow.doctor.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0],
+            returncode=_CODEX_AUTH_VIA_API_KEY_AND_LOGIN_STATUS_EXIT_CODE,
+            stdout="",
+            stderr="",
+        ),
+    )
+
+    report = build_local_smoke_doctor_report(home=home)
+
+    assert report.status == "ok"
+    assert report.as_dict()["checks"][-1] == {
+        "name": "kimi_shell_helper",
+        "status": "ok",
+        "detail": (
+            "`kimi` is available in `bash -lic`, exports `ANTHROPIC_API_KEY`, "
+            "sets `ANTHROPIC_BASE_URL=https://api.kimi.com/coding/`, keeps both `claude` and `codex` available, "
+            "and confirms Codex authentication is ready via `OPENAI_API_KEY` + `codex login status` for the bundled smoke pipeline."
         ),
     }
 

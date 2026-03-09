@@ -38,6 +38,7 @@ _CLAUDE_AFTER_KIMI_VERSION_FAILED_EXIT_CODE = 18
 _CODEX_AFTER_KIMI_VERSION_FAILED_EXIT_CODE = 19
 _CODEX_AUTH_VIA_LOGIN_STATUS_EXIT_CODE = 20
 _CODEX_AUTH_VIA_API_KEY_EXIT_CODE = 21
+_CODEX_AUTH_VIA_API_KEY_AND_LOGIN_STATUS_EXIT_CODE = 22
 _EXPECTED_KIMI_ANTHROPIC_BASE_URL = "https://api.kimi.com/coding/"
 _REDACTED = "<redacted>"
 _BASH_INTERACTIVE_STDERR_NOISE = (
@@ -416,10 +417,10 @@ def _local_codex_auth_ok_sources_detail(
     *,
     api_key_env: str,
     allow_login_status: bool,
-    source: str | None = None,
+    source: tuple[str, ...] | None = None,
 ) -> str:
     if source is not None:
-        return f"`{source}`"
+        return " + ".join(f"`{item}`" for item in source)
     if allow_login_status:
         return f"`codex login status` or `{api_key_env}`"
     return f"`{api_key_env}`"
@@ -430,7 +431,7 @@ def _local_codex_auth_ok_check_detail(
     *,
     api_key_env: str,
     allow_login_status: bool,
-    source: str | None = None,
+    source: tuple[str, ...] | None = None,
 ) -> str:
     auth_sources_detail = _local_codex_auth_ok_sources_detail(
         api_key_env=api_key_env,
@@ -453,11 +454,13 @@ def _resolved_local_codex_auth_source(
     *,
     api_key_env: str,
     allow_login_status: bool,
-) -> str | None:
+) -> tuple[str, ...] | None:
+    if allow_login_status and returncode == _CODEX_AUTH_VIA_API_KEY_AND_LOGIN_STATUS_EXIT_CODE:
+        return (api_key_env, "codex login status")
     if returncode == _CODEX_AUTH_VIA_API_KEY_EXIT_CODE:
-        return api_key_env
+        return (api_key_env,)
     if allow_login_status and returncode == _CODEX_AUTH_VIA_LOGIN_STATUS_EXIT_CODE:
-        return "codex login status"
+        return ("codex login status",)
     return None
 
 
@@ -530,21 +533,31 @@ def _codex_auth_probe_command(executable: str, *, api_key_env: str, allow_login_
         "import os",
         "import sys",
         "api_key_env = sys.argv[2]",
-        "if api_key_env and os.getenv(api_key_env, '').strip():",
-        f"    raise SystemExit({_CODEX_AUTH_VIA_API_KEY_EXIT_CODE})",
+        "has_api_key = bool(api_key_env and os.getenv(api_key_env, '').strip())",
     ]
     if allow_login_status:
         probe_lines.extend(
             [
                 "import subprocess",
+                "login_ready = subprocess.run([sys.argv[1], 'login', 'status']).returncode == 0",
+                "if has_api_key and login_ready:",
+                f"    raise SystemExit({_CODEX_AUTH_VIA_API_KEY_AND_LOGIN_STATUS_EXIT_CODE})",
+                "if has_api_key:",
+                f"    raise SystemExit({_CODEX_AUTH_VIA_API_KEY_EXIT_CODE})",
                 (
                     f"raise SystemExit({_CODEX_AUTH_VIA_LOGIN_STATUS_EXIT_CODE} "
-                    "if subprocess.run([sys.argv[1], 'login', 'status']).returncode == 0 else 1)"
+                    "if login_ready else 1)"
                 ),
             ]
         )
     else:
-        probe_lines.append("raise SystemExit(1)")
+        probe_lines.extend(
+            [
+                "if has_api_key:",
+                f"    raise SystemExit({_CODEX_AUTH_VIA_API_KEY_EXIT_CODE})",
+                "raise SystemExit(1)",
+            ]
+        )
     return [sys.executable, "-c", "\n".join(probe_lines) + "\n", executable, api_key_env]
 
 
@@ -1563,7 +1576,13 @@ def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
             f"{shlex.quote('claude')} --version >/dev/null 2>&1 || exit {_CLAUDE_AFTER_KIMI_VERSION_FAILED_EXIT_CODE}",
             f"type {shlex.quote('codex')} >/dev/null 2>&1 || exit {_CODEX_AFTER_KIMI_MISSING_EXIT_CODE}",
             f"{shlex.quote('codex')} --version >/dev/null 2>&1 || exit {_CODEX_AFTER_KIMI_VERSION_FAILED_EXIT_CODE}",
-            f'[ -n "${{OPENAI_API_KEY:-}}" ] && exit {_CODEX_AUTH_VIA_API_KEY_EXIT_CODE}',
+            (
+                'if [ -n "${OPENAI_API_KEY:-}" ]; then '
+                f"{shlex.quote('codex')} login status >/dev/null 2>&1 && exit "
+                f"{_CODEX_AUTH_VIA_API_KEY_AND_LOGIN_STATUS_EXIT_CODE}; "
+                f"exit {_CODEX_AUTH_VIA_API_KEY_EXIT_CODE}; "
+                "fi"
+            ),
             (
                 f"{shlex.quote('codex')} login status >/dev/null 2>&1 && exit "
                 f"{_CODEX_AUTH_VIA_LOGIN_STATUS_EXIT_CODE}"

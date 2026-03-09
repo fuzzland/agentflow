@@ -18,6 +18,7 @@ from agentflow.doctor import (
     DoctorCheck,
     DoctorReport,
     ShellBridgeRecommendation,
+    _CODEX_AUTH_VIA_API_KEY_AND_LOGIN_STATUS_EXIT_CODE,
     build_bash_login_shell_bridge_recommendation,
 )
 from agentflow.prepared import ExecutionPaths
@@ -103,6 +104,19 @@ def _mock_custom_kimi_preflight(
 def _completed_subprocess(returncode: int = 0, *, stdout: str = "", stderr: str = ""):
     def _run(*args, **kwargs):
         return subprocess.CompletedProcess(args=args[0], returncode=returncode, stdout=stdout, stderr=stderr)
+
+    return _run
+
+
+def _codex_ready_and_auth_subprocess(auth_returncode: int):
+    def _run(*args, **kwargs):
+        env = kwargs.get("env") or {}
+        target_command = str(env.get("AGENTFLOW_TARGET_COMMAND", ""))
+        if "codex --version" in target_command:
+            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr="")
+        if "OPENAI_API_KEY" in target_command and "subprocess.run" in target_command:
+            return subprocess.CompletedProcess(args=args[0], returncode=auth_returncode, stdout="", stderr="")
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr="")
 
     return _run
 
@@ -4014,6 +4028,7 @@ def test_run_show_preflight_prints_successful_summary_to_stderr(monkeypatch):
 
     _reject_bundled_smoke_doctor(monkeypatch)
     monkeypatch.setattr(agentflow.cli, "build_local_kimi_bootstrap_doctor_report", lambda: _custom_kimi_preflight_report())
+    monkeypatch.setattr("agentflow.doctor.subprocess.run", _codex_ready_and_auth_subprocess(_CODEX_AUTH_VIA_API_KEY_AND_LOGIN_STATUS_EXIT_CODE))
     monkeypatch.setattr(
         agentflow.cli,
         "_build_runtime",
@@ -4040,7 +4055,7 @@ def test_run_show_preflight_prints_successful_summary_to_stderr(monkeypatch):
         "- codex_ready: ok - Node `codex_plan` (codex) can launch local Codex after the node shell bootstrap; "
         "`codex --version` succeeds in the prepared local shell.\n"
         "- codex_auth: ok - Node `codex_plan` (codex) can authenticate local Codex after the node shell bootstrap via "
-        "`OPENAI_API_KEY`.\n"
+        "`OPENAI_API_KEY` + `codex login status`.\n"
         "Pipeline auto preflight: enabled - local Codex/Claude/Kimi nodes use a `kimi` shell bootstrap.\n"
         "Pipeline auto preflight matches: codex_plan (codex) via `target.shell_init`\n"
     )
@@ -5673,6 +5688,7 @@ def test_smoke_show_preflight_reports_pipeline_specific_readiness_for_custom_kim
 
     _reject_bundled_smoke_doctor(monkeypatch)
     monkeypatch.setattr(agentflow.cli, "build_local_kimi_bootstrap_doctor_report", lambda: _custom_kimi_preflight_report())
+    monkeypatch.setattr("agentflow.doctor.subprocess.run", _codex_ready_and_auth_subprocess(_CODEX_AUTH_VIA_API_KEY_AND_LOGIN_STATUS_EXIT_CODE))
     monkeypatch.setattr(
         agentflow.cli,
         "_build_runtime",
@@ -5699,7 +5715,7 @@ def test_smoke_show_preflight_reports_pipeline_specific_readiness_for_custom_kim
         "- codex_ready: ok - Node `codex_plan` (codex) can launch local Codex after the node shell bootstrap; "
         "`codex --version` succeeds in the prepared local shell.\n"
         "- codex_auth: ok - Node `codex_plan` (codex) can authenticate local Codex after the node shell bootstrap via "
-        "`OPENAI_API_KEY`.\n"
+        "`OPENAI_API_KEY` + `codex login status`.\n"
         "Pipeline auto preflight: enabled - local Codex/Claude/Kimi nodes use a `kimi` shell bootstrap.\n"
         "Pipeline auto preflight matches: codex_plan (codex) via `target.shell_init`\n"
     )
