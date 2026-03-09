@@ -79,6 +79,103 @@ def test_api_supports_validation_and_artifacts(tmp_path):
     assert launch.json()["command"][0] == "python3"
 
 
+def test_api_validate_resolves_inline_yaml_relative_to_explicit_base_dir(tmp_path):
+    orchestrator = make_orchestrator(tmp_path)
+    app = create_app(store=orchestrator.store, orchestrator=orchestrator)
+    client = TestClient(app)
+
+    workspace = tmp_path / "workspace"
+    response = client.post(
+        "/api/runs/validate",
+        json={
+            "yaml": (
+                "name: inline-yaml\n"
+                "working_dir: .\n"
+                "nodes:\n"
+                "  - id: alpha\n"
+                "    agent: codex\n"
+                "    prompt: hi\n"
+                "    target:\n"
+                "      kind: local\n"
+                "      cwd: task\n"
+            ),
+            "base_dir": str(workspace),
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["pipeline"]
+    assert payload["working_dir"] == str(workspace.resolve())
+    assert payload["nodes"][0]["target"]["cwd"] == str((workspace / "task").resolve())
+
+
+def test_api_run_resolves_inline_pipeline_relative_to_explicit_base_dir(tmp_path):
+    orchestrator = make_orchestrator(tmp_path)
+    app = create_app(store=orchestrator.store, orchestrator=orchestrator)
+    client = TestClient(app)
+
+    workspace = tmp_path / "workspace"
+    (workspace / "task").mkdir(parents=True)
+    response = client.post(
+        "/api/runs",
+        json={
+            "base_dir": str(workspace),
+            "pipeline": {
+                "name": "inline-json",
+                "working_dir": ".",
+                "nodes": [
+                    {
+                        "id": "alpha",
+                        "agent": "codex",
+                        "prompt": "hi",
+                        "target": {
+                            "kind": "local",
+                            "cwd": "task",
+                        },
+                    }
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    payload = body["pipeline"]
+    assert payload["working_dir"] == str(workspace.resolve())
+    assert payload["nodes"][0]["target"]["cwd"] == str((workspace / "task").resolve())
+    asyncio.run(orchestrator.wait(body["id"], timeout=5))
+
+
+def test_api_validate_supports_pipeline_path_payload(tmp_path):
+    orchestrator = make_orchestrator(tmp_path)
+    app = create_app(store=orchestrator.store, orchestrator=orchestrator)
+    client = TestClient(app)
+
+    pipeline_dir = tmp_path / "pipelines"
+    pipeline_dir.mkdir()
+    pipeline_path = pipeline_dir / "api.yaml"
+    pipeline_path.write_text(
+        """name: pipeline-path
+working_dir: .
+nodes:
+  - id: alpha
+    agent: codex
+    prompt: hi
+    target:
+      kind: local
+      cwd: task
+""",
+        encoding="utf-8",
+    )
+
+    response = client.post("/api/runs/validate", json={"pipeline_path": str(pipeline_path)})
+
+    assert response.status_code == 200
+    payload = response.json()["pipeline"]
+    assert payload["working_dir"] == str(pipeline_dir.resolve())
+    assert payload["nodes"][0]["target"]["cwd"] == str((pipeline_dir / "task").resolve())
+
+
 def test_api_supports_cancel_and_rerun(tmp_path):
     orchestrator = make_orchestrator(tmp_path)
     app = create_app(store=orchestrator.store, orchestrator=orchestrator)

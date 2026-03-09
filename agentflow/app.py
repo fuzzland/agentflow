@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from agentflow.defaults import load_default_pipeline_yaml
-from agentflow.loader import load_pipeline_from_text
+from agentflow.loader import load_pipeline_from_data, load_pipeline_from_path, load_pipeline_from_text
 from agentflow.orchestrator import Orchestrator
 from agentflow.specs import PipelineSpec
 from agentflow.store import RunStore
@@ -21,9 +21,20 @@ _TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
 
 def _parse_pipeline_payload(payload: dict[str, Any]) -> PipelineSpec:
     try:
+        pipeline_path = payload.get("pipeline_path")
+        if isinstance(pipeline_path, str) and pipeline_path.strip():
+            return load_pipeline_from_path(pipeline_path)
+
+        base_dir = payload.get("base_dir")
         if "yaml" in payload:
-            return load_pipeline_from_text(payload["yaml"])
-        return PipelineSpec.model_validate(payload["pipeline"] if "pipeline" in payload else payload)
+            return load_pipeline_from_text(payload["yaml"], base_dir=base_dir)
+
+        pipeline_data = payload["pipeline"] if "pipeline" in payload else dict(payload)
+        if isinstance(pipeline_data, dict):
+            pipeline_data = dict(pipeline_data)
+            pipeline_data.pop("base_dir", None)
+            pipeline_data.pop("pipeline_path", None)
+        return load_pipeline_from_data(pipeline_data, base_dir=base_dir)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
