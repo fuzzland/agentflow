@@ -201,6 +201,8 @@ def _resolved_auth_requirement(node: NodeSpec) -> tuple[str | None, str | None]:
         return resolved_provider.api_key_env, resolved_provider.name
     if node.agent == AgentKind.CODEX:
         return "OPENAI_API_KEY", "openai"
+    if node.agent == AgentKind.CLAUDE:
+        return "ANTHROPIC_API_KEY", "anthropic"
     return None, None
 
 

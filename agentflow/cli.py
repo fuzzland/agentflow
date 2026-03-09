@@ -835,6 +835,8 @@ def _resolved_provider_api_key_env(node: object) -> tuple[str | None, str | None
     provider = resolve_provider(getattr(node, "provider", None), AgentKind(agent))
     if provider is not None and provider.api_key_env:
         return provider.api_key_env, provider.name
+    if agent == AgentKind.CLAUDE.value:
+        return "ANTHROPIC_API_KEY", "anthropic"
     if agent == AgentKind.KIMI.value:
         return "KIMI_API_KEY", "moonshot"
     return None, None
