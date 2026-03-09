@@ -4483,6 +4483,7 @@ def test_check_local_uses_bundled_pipeline_by_default(monkeypatch):
 
     monkeypatch.setenv("AGENTFLOW_RUNS_DIR", "/tmp/agentflow-check-local-runs")
     monkeypatch.setenv("AGENTFLOW_MAX_CONCURRENT_RUNS", "4")
+    monkeypatch.setattr(agentflow.cli, "_stream_supports_tty_summary", lambda *, err: True)
     _mock_local_readiness_info(monkeypatch)
 
     class FakeOrchestrator:
@@ -4551,6 +4552,7 @@ def test_check_local_uses_bundled_pipeline_by_default(monkeypatch):
 
 def test_check_local_reuses_preflight_loaded_pipeline(monkeypatch):
     captured: dict[str, object] = {}
+    monkeypatch.setattr(agentflow.cli, "_stream_supports_tty_summary", lambda *, err: True)
 
     class FakeOrchestrator:
         async def submit(self, pipeline: object):
@@ -4586,6 +4588,83 @@ def test_check_local_reuses_preflight_loaded_pipeline(monkeypatch):
     assert captured["load_calls"] == 1
     assert captured["submitted_pipeline"] is captured["loaded_pipelines"][0]
     assert len(loaded_pipelines) == 1
+
+
+def test_check_local_defaults_to_json_when_not_tty(monkeypatch):
+    class FakeOrchestrator:
+        async def submit(self, pipeline: object):
+            return SimpleNamespace(id="check-local-auto-json")
+
+        async def wait(self, run_id: str, timeout: float | None = None):
+            return _completed_run(run_id, pipeline_name="local-real-agents-kimi-smoke")
+
+    monkeypatch.setattr(agentflow.cli, "_stream_supports_tty_summary", lambda *, err: False)
+    monkeypatch.setattr(
+        agentflow.cli,
+        "build_local_smoke_doctor_report",
+        lambda: DoctorReport(
+            status="warning",
+            checks=[DoctorCheck(name="bash_login_startup", status="warning", detail="missing bridge")],
+        ),
+    )
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda runs_dir, max_concurrent_runs: (SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id), FakeOrchestrator()),
+    )
+    monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: "examples/local-real-agents-kimi-smoke.yaml")
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: object())
+
+    result = runner.invoke(app, ["check-local"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stderr) == {
+        "status": "warning",
+        "checks": [{"name": "bash_login_startup", "status": "warning", "detail": "missing bridge"}],
+        "pipeline": {
+            "auto_preflight": {
+                "enabled": True,
+                "reason": "path matches the bundled real-agent smoke pipeline.",
+                "matches": [],
+                "match_summary": [],
+            }
+        },
+    }
+    assert json.loads(result.stdout) == {"id": "check-local-auto-json", "status": "completed"}
+
+
+def test_check_local_defaults_to_summary_on_tty(monkeypatch):
+    _mock_local_readiness_info(monkeypatch)
+
+    class FakeOrchestrator:
+        async def submit(self, pipeline: object):
+            return SimpleNamespace(id="check-local-auto-summary")
+
+        async def wait(self, run_id: str, timeout: float | None = None):
+            return _completed_run(run_id, pipeline_name="local-real-agents-kimi-smoke")
+
+    monkeypatch.setattr(agentflow.cli, "_stream_supports_tty_summary", lambda *, err: True)
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda runs_dir, max_concurrent_runs: (SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id), FakeOrchestrator()),
+    )
+    monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: "examples/local-real-agents-kimi-smoke.yaml")
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: object())
+
+    result = runner.invoke(app, ["check-local"])
+
+    assert result.exit_code == 0
+    assert result.stderr == (
+        "Doctor: ok\n"
+        "- kimi_shell_helper: ok - ready\n"
+        "- claude_ready: ok - Node `claude_review` (claude) can launch local Claude after the node shell bootstrap; `claude --version` succeeds in the prepared local shell.\n"
+        "- codex_ready: ok - Node `codex_plan` (codex) can launch local Codex after the node shell bootstrap; `codex --version` succeeds in the prepared local shell.\n"
+        "- codex_auth: ok - Node `codex_plan` (codex) can authenticate local Codex after the node shell bootstrap via `codex login status` or `OPENAI_API_KEY`.\n"
+        "Pipeline auto preflight: enabled - path matches the bundled real-agent smoke pipeline.\n"
+    )
+    assert "Run check-local-auto-summary: completed" in result.stdout
 
 
 def test_check_local_uses_json_doctor_output_when_run_output_is_json(monkeypatch):
@@ -4743,6 +4822,7 @@ def test_check_local_uses_json_summary_doctor_output_when_run_output_is_json_sum
 def test_check_local_stops_when_doctor_fails(monkeypatch):
     bundled_path = str((Path.cwd() / "examples/local-real-agents-kimi-smoke.yaml").resolve())
 
+    monkeypatch.setattr(agentflow.cli, "_stream_supports_tty_summary", lambda *, err: True)
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report(status="failed", detail="missing"))
     monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: bundled_path)
     monkeypatch.setattr(agentflow.cli, "_load_pipeline", _capture_pipeline_loader({}, object()))
@@ -4786,6 +4866,7 @@ def test_doctor_custom_non_kimi_pipeline_skips_bundled_smoke_prereqs(monkeypatch
 def test_check_local_custom_non_kimi_pipeline_skips_bundled_smoke_prereqs(monkeypatch):
     captured: dict[str, object] = {}
     fake_pipeline = SimpleNamespace(nodes=[])
+    monkeypatch.setattr(agentflow.cli, "_stream_supports_tty_summary", lambda *, err: True)
 
     class FakeOrchestrator:
         async def submit(self, pipeline: object):
@@ -4822,6 +4903,7 @@ def test_check_local_custom_non_kimi_pipeline_skips_bundled_smoke_prereqs(monkey
 
 def test_check_local_custom_kimi_pipeline_reports_successful_local_agent_probes(monkeypatch):
     captured: dict[str, object] = {}
+    monkeypatch.setattr(agentflow.cli, "_stream_supports_tty_summary", lambda *, err: True)
 
     class FakeOrchestrator:
         async def submit(self, pipeline: object):

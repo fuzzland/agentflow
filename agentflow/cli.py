@@ -1805,7 +1805,11 @@ def check_local(
     path: str | None = typer.Argument(None, help="Optional pipeline path. Defaults to the bundled real-agent smoke example."),
     runs_dir: str = typer.Option(".agentflow/runs", envvar="AGENTFLOW_RUNS_DIR"),
     max_concurrent_runs: int = typer.Option(2, envvar="AGENTFLOW_MAX_CONCURRENT_RUNS"),
-    output: RunOutputFormat = typer.Option(RunOutputFormat.SUMMARY, "--output", help="Result output format."),
+    output: RunOutputFormat = typer.Option(
+        RunOutputFormat.AUTO,
+        "--output",
+        help="Result output format. Defaults to `summary` on a terminal and `json` otherwise.",
+    ),
     shell_bridge: bool = typer.Option(
         False,
         "--shell-bridge",
