@@ -7393,6 +7393,11 @@ nodes:
     )
 
     monkeypatch.setattr(agentflow.cli, "build_pipeline_local_claude_readiness_checks", lambda pipeline: [])
+    monkeypatch.setattr(
+        agentflow.cli,
+        "build_pipeline_local_claude_readiness_info_checks",
+        lambda pipeline: [DoctorCheck(name="claude_ready", status="ok", detail="ready")],
+    )
     monkeypatch.setenv("ANTHROPIC_API_KEY", "super-secret")
 
     result = runner.invoke(app, ["doctor", str(pipeline_path), "--output", "summary"])
@@ -7400,6 +7405,7 @@ nodes:
     assert result.exit_code == 0
     assert result.stdout == (
         "Doctor: ok\n"
+        "- claude_ready: ok - ready\n"
         "Pipeline auto preflight: enabled - local Kimi-backed nodes require pipeline-specific readiness checks.\n"
         "Pipeline auto preflight matches: review (claude) via `provider`\n"
     )
@@ -7419,6 +7425,11 @@ nodes:
     )
 
     monkeypatch.setattr(agentflow.cli, "build_pipeline_local_kimi_readiness_checks", lambda pipeline: [])
+    monkeypatch.setattr(
+        agentflow.cli,
+        "build_pipeline_local_kimi_readiness_info_checks",
+        lambda pipeline: [DoctorCheck(name="kimi_ready", status="ok", detail="ready")],
+    )
     monkeypatch.setenv("KIMI_API_KEY", "super-secret")
 
     result = runner.invoke(app, ["doctor", str(pipeline_path), "--output", "summary"])
@@ -7426,6 +7437,7 @@ nodes:
     assert result.exit_code == 0
     assert result.stdout == (
         "Doctor: ok\n"
+        "- kimi_ready: ok - ready\n"
         "Pipeline auto preflight: enabled - local Kimi-backed nodes require pipeline-specific readiness checks.\n"
         "Pipeline auto preflight matches: review (kimi) via `agent`\n"
     )

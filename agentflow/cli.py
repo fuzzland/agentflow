@@ -1184,7 +1184,7 @@ def _auto_smoke_preflight_metadata(path: str, pipeline: object) -> dict[str, obj
 
 
 def _include_ok_local_preflight_checks(path: str, pipeline: object) -> bool:
-    return not _path_matches_bundled_smoke(path) and _pipeline_uses_kimi_smoke_preflight(pipeline)
+    return not _path_matches_bundled_smoke(path) and _pipeline_uses_auto_preflight(pipeline)
 
 
 def _should_run_smoke_preflight(
