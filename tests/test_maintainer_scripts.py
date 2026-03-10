@@ -251,6 +251,34 @@ def test_make_help_verify_local_mentions_bundled_run_local() -> None:
     assert completed.stderr == ""
 
 
+def test_make_help_mentions_custom_kimi_smoke_shortcuts() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+
+    completed = subprocess.run(
+        ["make", "-s", "help"],
+        capture_output=True,
+        cwd=repo_root,
+        env=os.environ,
+        text=True,
+        timeout=5,
+    )
+
+    assert completed.returncode == 0
+    assert (
+        "smoke-local-custom Verify a temporary external Codex + Claude-on-Kimi pipeline through "
+        "`agentflow smoke`"
+    ) in completed.stdout
+    assert (
+        "smoke-local-custom-shell-init Verify a temporary external Codex + Claude-on-Kimi `shell_init: "
+        "kimi` pipeline through `agentflow smoke`"
+    ) in completed.stdout
+    assert (
+        "smoke-local-custom-shell-wrapper Verify a temporary external Codex + Claude-on-Kimi `target.shell` "
+        "wrapper pipeline through `agentflow smoke`"
+    ) in completed.stdout
+    assert completed.stderr == ""
+
+
 def test_make_help_mentions_probe_claude_local_target() -> None:
     repo_root = Path(__file__).resolve().parents[1]
 
@@ -390,6 +418,35 @@ def test_make_bundled_kimi_variant_shortcuts_point_to_shipped_examples() -> None
     ) in completed.stdout
     assert (
         f"{recipe_python} -m agentflow check-local examples/local-real-agents-kimi-shell-wrapper-smoke.yaml --output summary"
+    ) in completed.stdout
+    assert completed.stderr == ""
+
+
+def test_make_custom_kimi_smoke_shortcuts_point_to_script_variants() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+
+    completed = subprocess.run(
+        [
+            "make",
+            "-n",
+            "smoke-local-custom",
+            "smoke-local-custom-shell-init",
+            "smoke-local-custom-shell-wrapper",
+        ],
+        capture_output=True,
+        cwd=repo_root,
+        env=os.environ,
+        text=True,
+        timeout=5,
+    )
+
+    assert completed.returncode == 0
+    assert "bash scripts/verify-custom-local-kimi-smoke.sh" in completed.stdout
+    assert (
+        "AGENTFLOW_KIMI_PIPELINE_MODE=shell-init bash scripts/verify-custom-local-kimi-smoke.sh"
+    ) in completed.stdout
+    assert (
+        "AGENTFLOW_KIMI_PIPELINE_MODE=shell-wrapper bash scripts/verify-custom-local-kimi-smoke.sh"
     ) in completed.stdout
     assert completed.stderr == ""
 
@@ -604,6 +661,60 @@ def test_verify_custom_local_kimi_run_script_times_out_when_agentflow_hangs(tmp_
     assert "run-stderr" in completed.stderr
     assert "agentflow run stdout:" in completed.stderr
     assert "run-stdout" in completed.stderr
+    assert elapsed < 3
+
+
+def test_verify_custom_local_kimi_smoke_script_times_out_when_agentflow_hangs(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+
+    smoke_path = _copy_script(
+        repo_root / "scripts" / "verify-custom-local-kimi-smoke.sh",
+        scripts_dir / "verify-custom-local-kimi-smoke.sh",
+    )
+    _copy_script(
+        repo_root / "scripts" / "custom-local-kimi-helpers.sh",
+        scripts_dir / "custom-local-kimi-helpers.sh",
+    )
+    fake_pythonpath = _write_fake_agentflow_module(
+        tmp_path / "fake-pythonpath",
+        """
+        from __future__ import annotations
+
+        import sys
+        import time
+
+        if len(sys.argv) > 1 and sys.argv[1] == "smoke":
+            print("smoke-stdout", flush=True)
+            print("smoke-stderr", file=sys.stderr, flush=True)
+            time.sleep(5)
+        """,
+    )
+
+    started_at = time.monotonic()
+    completed = subprocess.run(
+        ["bash", str(smoke_path)],
+        capture_output=True,
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "AGENTFLOW_PYTHON": sys.executable,
+            "PYTHONPATH": str(fake_pythonpath),
+            "AGENTFLOW_LOCAL_VERIFY_TIMEOUT_SECONDS": "0.2",
+        },
+        text=True,
+        timeout=5,
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert completed.returncode == 124
+    assert "custom smoke pipeline path:" in completed.stdout
+    assert "Timed out after 0.2s:" in completed.stderr
+    assert "agentflow smoke stderr:" in completed.stderr
+    assert "smoke-stderr" in completed.stderr
+    assert "agentflow smoke stdout:" in completed.stderr
+    assert "smoke-stdout" in completed.stderr
     assert elapsed < 3
 
 
@@ -829,6 +940,81 @@ def test_verify_custom_local_kimi_pipeline_script_reports_success(tmp_path: Path
     assert completed.stderr == ""
 
 
+def test_verify_custom_local_kimi_smoke_script_reports_success(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+
+    smoke_path = _copy_script(
+        repo_root / "scripts" / "verify-custom-local-kimi-smoke.sh",
+        scripts_dir / "verify-custom-local-kimi-smoke.sh",
+    )
+    _copy_script(
+        repo_root / "scripts" / "custom-local-kimi-helpers.sh",
+        scripts_dir / "custom-local-kimi-helpers.sh",
+    )
+    fake_pythonpath = _write_fake_agentflow_module(
+        tmp_path / "fake-pythonpath",
+        """
+        from __future__ import annotations
+
+        import json
+        import sys
+        from pathlib import Path
+
+        if len(sys.argv) > 2 and sys.argv[1] == "smoke":
+            pipeline_path = Path(sys.argv[2])
+            pipeline_name = pipeline_path.stem
+
+            payload = {
+                "status": "completed",
+                "pipeline": {"name": pipeline_name},
+                "nodes": [
+                    {"id": "codex_plan", "status": "completed", "preview": "codex ok"},
+                    {"id": "claude_review", "status": "completed", "preview": "claude ok"},
+                ],
+            }
+            print(json.dumps(payload), flush=True)
+            print("Doctor: ok", file=sys.stderr, flush=True)
+            print(
+                "- bootstrap_env_override: ok - Node `claude_review`: Local shell bootstrap overrides "
+                "current `ANTHROPIC_API_KEY` for this node via `target.bootstrap` (`kimi` helper).",
+                file=sys.stderr,
+                flush=True,
+            )
+            print(
+                "Pipeline auto preflight: enabled - local Codex/Claude/Kimi nodes use a `kimi` shell bootstrap.",
+                file=sys.stderr,
+                flush=True,
+            )
+            print(
+                "Pipeline auto preflight matches: codex_plan (codex) via `target.bootstrap`, "
+                "claude_review (claude) via `target.bootstrap`",
+                file=sys.stderr,
+                flush=True,
+            )
+        """,
+    )
+
+    completed = subprocess.run(
+        ["bash", str(smoke_path)],
+        capture_output=True,
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "AGENTFLOW_PYTHON": sys.executable,
+            "PYTHONPATH": str(fake_pythonpath),
+        },
+        text=True,
+        timeout=5,
+    )
+
+    assert completed.returncode == 0
+    assert "custom smoke pipeline path:" in completed.stdout
+    assert "validated agentflow smoke json-summary stdout and preflight stderr" in completed.stdout
+    assert completed.stderr == ""
+
+
 def test_custom_local_kimi_pipeline_writers_match_bundled_examples(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     helpers_path = repo_root / "scripts" / "custom-local-kimi-helpers.sh"
@@ -895,6 +1081,7 @@ def test_verify_local_kimi_stack_script_runs_steps_in_expected_order(tmp_path: P
         "verify-bundled-local-kimi-run.sh",
         "verify-custom-local-kimi-doctor.sh",
         "verify-custom-local-kimi-inspect.sh",
+        "verify-custom-local-kimi-smoke.sh",
         "verify-custom-local-kimi-pipeline.sh",
         "verify-custom-local-kimi-shell-init.sh",
         "verify-custom-local-kimi-run.sh",
@@ -947,6 +1134,9 @@ def test_verify_local_kimi_stack_script_runs_steps_in_expected_order(tmp_path: P
         "verify-custom-local-kimi-inspect.sh mode=",
         "verify-custom-local-kimi-inspect.sh mode=shell-init",
         "verify-custom-local-kimi-inspect.sh mode=shell-wrapper",
+        "verify-custom-local-kimi-smoke.sh mode=",
+        "verify-custom-local-kimi-smoke.sh mode=shell-init",
+        "verify-custom-local-kimi-smoke.sh mode=shell-wrapper",
         "verify-custom-local-kimi-pipeline.sh mode=",
         "verify-custom-local-kimi-shell-init.sh mode=",
         "verify-custom-local-kimi-pipeline.sh mode=shell-wrapper",
@@ -954,7 +1144,7 @@ def test_verify_local_kimi_stack_script_runs_steps_in_expected_order(tmp_path: P
         "verify-custom-local-kimi-run.sh mode=shell-init",
         "verify-custom-local-kimi-run.sh mode=shell-wrapper",
     ]
-    assert completed.stdout.count("== ") == 30
+    assert completed.stdout.count("== ") == 33
     assert "== Shell toolchain ==" in completed.stdout
     assert "== Bundled toolchain-local ==" in completed.stdout
     assert "== Bundled inspect-local ==" in completed.stdout
@@ -971,4 +1161,6 @@ def test_verify_local_kimi_stack_script_runs_steps_in_expected_order(tmp_path: P
     assert "== Bundled run-local (target.shell) ==" in completed.stdout
     assert "== Bundled check-local (target.shell) ==" in completed.stdout
     assert "== Claude-on-Kimi live probe ==" in completed.stdout
+    assert "== External custom smoke ==" in completed.stdout
+    assert "== External custom smoke (target.shell) ==" in completed.stdout
     assert "== External custom run (target.shell) ==" in completed.stdout

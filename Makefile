@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help python test inspect-local inspect-local-shell-init inspect-local-shell-wrapper doctor-local doctor-local-shell-init doctor-local-shell-wrapper smoke-local smoke-local-shell-init smoke-local-shell-wrapper run-local run-local-shell-init run-local-shell-wrapper check-local check-local-shell-init check-local-shell-wrapper toolchain-local probe-claude-local doctor-local-custom doctor-local-custom-shell-init doctor-local-custom-shell-wrapper inspect-local-custom inspect-local-custom-shell-init inspect-local-custom-shell-wrapper check-local-custom check-local-custom-shell-init check-local-custom-shell-wrapper run-local-custom run-local-custom-shell-init run-local-custom-shell-wrapper verify-local
+.PHONY: help python test inspect-local inspect-local-shell-init inspect-local-shell-wrapper doctor-local doctor-local-shell-init doctor-local-shell-wrapper smoke-local smoke-local-shell-init smoke-local-shell-wrapper run-local run-local-shell-init run-local-shell-wrapper check-local check-local-shell-init check-local-shell-wrapper toolchain-local probe-claude-local doctor-local-custom doctor-local-custom-shell-init doctor-local-custom-shell-wrapper inspect-local-custom inspect-local-custom-shell-init inspect-local-custom-shell-wrapper smoke-local-custom smoke-local-custom-shell-init smoke-local-custom-shell-wrapper check-local-custom check-local-custom-shell-init check-local-custom-shell-wrapper run-local-custom run-local-custom-shell-init run-local-custom-shell-wrapper verify-local
 
 PYTHON := $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 
@@ -11,13 +11,16 @@ help:
 	  '  test          Run the Python test suite' \
 	  '  toolchain-local Run `agentflow toolchain-local --output summary` for the local bash/Kimi/Codex/Claude readiness check' \
 	  '  probe-claude-local Run a minimal live Claude-on-Kimi request through the local bash + kimi bootstrap and preserve provider-side errors' \
-	  '  verify-local  Run the full local Codex + Claude-on-Kimi verification stack across bundled bootstrap/shell_init/target.shell inspect/doctor/smoke/run/check-local coverage, bundled toolchain-local, the live Claude-on-Kimi probe, plus external custom doctor, inspect, check-local, and run paths (shared timeout via AGENTFLOW_LOCAL_VERIFY_TIMEOUT_SECONDS)' \
+	  '  verify-local  Run the full local Codex + Claude-on-Kimi verification stack across bundled bootstrap/shell_init/target.shell inspect/doctor/smoke/run/check-local coverage, bundled toolchain-local, the live Claude-on-Kimi probe, plus external custom doctor, inspect, smoke, check-local, and run paths (shared timeout via AGENTFLOW_LOCAL_VERIFY_TIMEOUT_SECONDS)' \
 	  '  doctor-local-custom Verify a temporary external Codex + Claude-on-Kimi pipeline through `agentflow doctor`' \
 	  '  doctor-local-custom-shell-init Verify a temporary external Codex + Claude-on-Kimi `shell_init: kimi` pipeline through `agentflow doctor`' \
 	  '  doctor-local-custom-shell-wrapper Verify a temporary external Codex + Claude-on-Kimi `target.shell` wrapper pipeline through `agentflow doctor`' \
 	  '  inspect-local-custom Verify a temporary external Codex + Claude-on-Kimi pipeline through `agentflow inspect`' \
 	  '  inspect-local-custom-shell-init Verify a temporary external Codex + Claude-on-Kimi `shell_init: kimi` pipeline through `agentflow inspect`' \
 	  '  inspect-local-custom-shell-wrapper Verify a temporary external Codex + Claude-on-Kimi `target.shell` wrapper pipeline through `agentflow inspect`' \
+	  '  smoke-local-custom Verify a temporary external Codex + Claude-on-Kimi pipeline through `agentflow smoke`' \
+	  '  smoke-local-custom-shell-init Verify a temporary external Codex + Claude-on-Kimi `shell_init: kimi` pipeline through `agentflow smoke`' \
+	  '  smoke-local-custom-shell-wrapper Verify a temporary external Codex + Claude-on-Kimi `target.shell` wrapper pipeline through `agentflow smoke`' \
 	  '  check-local-custom Verify a temporary external Codex + Claude-on-Kimi pipeline through `agentflow check-local`' \
 	  '  check-local-custom-shell-init Verify a temporary external Codex + Claude-on-Kimi `shell_init: kimi` pipeline through `agentflow check-local`' \
 	  '  check-local-custom-shell-wrapper Verify a temporary external Codex + Claude-on-Kimi `target.shell` wrapper pipeline through `agentflow check-local`' \
@@ -72,6 +75,15 @@ inspect-local-custom-shell-init:
 
 inspect-local-custom-shell-wrapper:
 	AGENTFLOW_KIMI_PIPELINE_MODE=shell-wrapper bash scripts/verify-custom-local-kimi-inspect.sh
+
+smoke-local-custom:
+	bash scripts/verify-custom-local-kimi-smoke.sh
+
+smoke-local-custom-shell-init:
+	AGENTFLOW_KIMI_PIPELINE_MODE=shell-init bash scripts/verify-custom-local-kimi-smoke.sh
+
+smoke-local-custom-shell-wrapper:
+	AGENTFLOW_KIMI_PIPELINE_MODE=shell-wrapper bash scripts/verify-custom-local-kimi-smoke.sh
 
 check-local-custom:
 	bash scripts/verify-custom-local-kimi-pipeline.sh
