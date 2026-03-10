@@ -270,6 +270,45 @@ def test_verify_local_kimi_codex_live_script_reports_provider_error_details(tmp_
     assert "bash: cannot set terminal process group (" not in completed.stderr
 
 
+def test_custom_local_kimi_helpers_classify_membership_probe_failure(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    helpers_path = repo_root / "scripts" / "custom-local-kimi-helpers.sh"
+    stdout_path = tmp_path / "stdout.log"
+    stderr_path = tmp_path / "stderr.log"
+    stdout_path.write_text(
+        'API Error: 402 {"error":{"type":"invalid_request_error","message":"membership required"}}\n',
+        encoding="utf-8",
+    )
+    stderr_path.write_text("", encoding="utf-8")
+
+    completed = _run_shell(
+        f'source "{helpers_path}" && agentflow_provider_side_probe_failure_kind "{stdout_path}" "{stderr_path}"',
+        cwd=repo_root,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout.strip() == "membership-billing"
+    assert completed.stderr == ""
+
+
+def test_custom_local_kimi_helpers_classify_generic_probe_failure(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    helpers_path = repo_root / "scripts" / "custom-local-kimi-helpers.sh"
+    stdout_path = tmp_path / "stdout.log"
+    stderr_path = tmp_path / "stderr.log"
+    stdout_path.write_text("API Error: 429 rate limit\n", encoding="utf-8")
+    stderr_path.write_text("provider request failed\n", encoding="utf-8")
+
+    completed = _run_shell(
+        f'source "{helpers_path}" && agentflow_provider_side_probe_failure_kind "{stdout_path}" "{stderr_path}"',
+        cwd=repo_root,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout.strip() == "upstream"
+    assert completed.stderr == ""
+
+
 def test_verify_local_kimi_claude_live_script_ignores_ambient_anthropic_env(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()

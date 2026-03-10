@@ -104,25 +104,60 @@ agentflow_filtered_probe_stderr_contents() {
     "$stderr_path" || true
 }
 
-agentflow_report_provider_side_probe_failure() {
-  local probe_name="$1"
-  local stdout_path="$2"
-  local stderr_path="$3"
+agentflow_combined_probe_output() {
+  local stdout_path="$1"
+  local stderr_path="$2"
   local stdout_snippet=""
   local stderr_snippet=""
-  local combined_output=""
 
   if [ -f "$stdout_path" ]; then
     stdout_snippet="$(sed -n '1,80p' "$stdout_path")"
   fi
   stderr_snippet="$(agentflow_filtered_probe_stderr_contents "$stderr_path")"
-  combined_output="${stdout_snippet}"$'\n'"${stderr_snippet}"
+  printf '%s\n%s\n' "$stdout_snippet" "$stderr_snippet"
+}
+
+agentflow_provider_side_probe_failure_kind() {
+  local stdout_path="$1"
+  local stderr_path="$2"
+  local combined_output=""
+
+  combined_output="$(agentflow_combined_probe_output "$stdout_path" "$stderr_path")"
 
   if ! printf '%s\n' "$combined_output" | grep -Eq 'API Error:'; then
     return 0
   fi
 
   if printf '%s\n' "$combined_output" | grep -Eqi 'API Error: 402|membership|benefits|billing|credits|quota'; then
+    printf 'membership-billing\n'
+    return 0
+  fi
+
+  printf 'upstream\n'
+}
+
+agentflow_probe_failure_is_provider_side() {
+  local stdout_path="$1"
+  local stderr_path="$2"
+  local failure_kind=""
+
+  failure_kind="$(agentflow_provider_side_probe_failure_kind "$stdout_path" "$stderr_path")"
+  [ -n "$failure_kind" ]
+}
+
+agentflow_report_provider_side_probe_failure() {
+  local probe_name="$1"
+  local stdout_path="$2"
+  local stderr_path="$3"
+  local failure_kind=""
+
+  failure_kind="$(agentflow_provider_side_probe_failure_kind "$stdout_path" "$stderr_path")"
+
+  if [ -z "$failure_kind" ]; then
+    return 0
+  fi
+
+  if [ "$failure_kind" = "membership-billing" ]; then
     printf "\nDiagnosis: %s reached the provider, but the request was rejected with a membership/billing-style API error. The local bash + kimi bootstrap is likely working; check the upstream provider account state.\n" "$probe_name" >&2
     return 0
   fi
