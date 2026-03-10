@@ -161,6 +161,16 @@ That helper writes the same temporary pipeline outside this repo, runs `agentflo
 Use `make inspect-local-custom-shell-init` when you want the same contract verified for the explicit `shell_init: kimi` wiring instead of the preset bootstrap shorthand.
 Use `make inspect-local-custom-shell-wrapper` when you want the same contract verified for the explicit `target.shell` Kimi wrapper.
 
+When you want to exercise the standalone `agentflow smoke` path against that same kind of external Codex + Claude-on-Kimi pipeline, run:
+
+```bash
+make smoke-local-custom
+```
+
+That helper writes the same temporary pipeline outside this repo, runs `agentflow smoke --output json-summary --show-preflight`, and validates the wrapper contract: smoke JSON stays on stdout, the successful preflight summary stays on stderr, and both local agent nodes complete with the expected previews. If the live run fails, it prints the captured stdout/stderr and keeps the temp directory path for debugging.
+Use `make smoke-local-custom-shell-init` when you want the same stdout/stderr contract exercised for the explicit `shell_init: kimi` form too.
+Use `make smoke-local-custom-shell-wrapper` when you want the same stdout/stderr contract exercised for the explicit `target.shell` Kimi wrapper too.
+
 When you want to exercise the main `agentflow run` path against that same kind of external Codex + Claude-on-Kimi pipeline, run:
 
 ```bash
@@ -177,8 +187,8 @@ When you want the full maintainer smoke sequence in one command, run:
 make verify-local
 ```
 
-That wrapper now runs both the raw shell-level Kimi toolchain check and the bundled `agentflow toolchain-local` / `check-local` commands, then runs `make probe-claude-local` to exercise a minimal live Claude-on-Kimi request before it executes the checked-in bundled `bootstrap: kimi`, explicit `shell_init: kimi`, and explicit `target.shell` Kimi smoke examples through `inspect`, `doctor`, `smoke`, and `run`. Only after those bundled paths pass does it move on to the external custom-pipeline `doctor`, `inspect`, `check-local`, and `run` paths for those same three bootstrap shapes. The bundled `run` legs specifically validate the stdout/stderr wrapper contract for all three shipped smoke examples, so regressions in `agentflow run` cannot hide behind a still-green generated custom pipeline or the baseline bundled file alone. It also prints whether `~/.bash_profile`, `~/.bash_login`, or `~/.profile` is supplying the bash login startup path before it verifies `kimi`, `codex`, and `claude`, reports whether Codex auth is coming from `OPENAI_API_KEY`, Codex CLI login, or both in that shared Kimi-backed shell, and shows the resolved `codex` / `claude` executable paths so it is easier to catch mixed Node/npm installs.
-Those maintainer scripts now apply the same timeout guard to every live `agentflow` invocation in the stack, including the bundled `toolchain-local`, `check-local`, and every bundled-example `inspect`, `doctor`, `smoke`, and `run` step plus the external `doctor`, `inspect`, `check-local`, and `run` paths. Override that stack-wide budget with `AGENTFLOW_LOCAL_VERIFY_TIMEOUT_SECONDS`; when it is unset, the helper falls back to `AGENTFLOW_DOCTOR_TIMEOUT_SECONDS` if you already exported it, otherwise it uses a 60-second default that is large enough for the real local Codex plus Claude-on-Kimi runs.
+That wrapper now runs both the raw shell-level Kimi toolchain check and the bundled `agentflow toolchain-local` / `check-local` commands, then runs `make probe-claude-local` to exercise a minimal live Claude-on-Kimi request before it executes the checked-in bundled `bootstrap: kimi`, explicit `shell_init: kimi`, and explicit `target.shell` Kimi smoke examples through `inspect`, `doctor`, `smoke`, and `run`. Only after those bundled paths pass does it move on to the external custom-pipeline `doctor`, `inspect`, `smoke`, `check-local`, and `run` paths for those same three bootstrap shapes. The bundled `run` legs and external custom `smoke` / `run` legs specifically validate the stdout/stderr wrapper contract for all three shipped smoke bootstrap shapes, so regressions in `agentflow smoke` or `agentflow run` cannot hide behind a still-green generated custom pipeline or the baseline bundled file alone. It also prints whether `~/.bash_profile`, `~/.bash_login`, or `~/.profile` is supplying the bash login startup path before it verifies `kimi`, `codex`, and `claude`, reports whether Codex auth is coming from `OPENAI_API_KEY`, Codex CLI login, or both in that shared Kimi-backed shell, and shows the resolved `codex` / `claude` executable paths so it is easier to catch mixed Node/npm installs.
+Those maintainer scripts now apply the same timeout guard to every live `agentflow` invocation in the stack, including the bundled `toolchain-local`, `check-local`, and every bundled-example `inspect`, `doctor`, `smoke`, and `run` step plus the external `doctor`, `inspect`, `smoke`, `check-local`, and `run` paths. Override that stack-wide budget with `AGENTFLOW_LOCAL_VERIFY_TIMEOUT_SECONDS`; when it is unset, the helper falls back to `AGENTFLOW_DOCTOR_TIMEOUT_SECONDS` if you already exported it, otherwise it uses a 60-second default that is large enough for the real local Codex plus Claude-on-Kimi runs.
 
 When you want that live Claude-on-Kimi check by itself, run:
 
