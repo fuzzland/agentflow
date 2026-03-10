@@ -226,23 +226,36 @@ def _shell_command_prefix_env_for_target(command: str | None, target: str) -> di
     return {}
 
 
-def _shell_command_exported_env_value_before_target(command: str | None, env_var: str, target: str) -> str | None:
-    if not isinstance(command, str) or not command.strip() or not env_var or not target:
-        return None
+def _shell_command_exported_env_for_target(
+    command: str | None,
+    target: str,
+    *,
+    inherited_env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    if not isinstance(command, str) or not command.strip() or not target:
+        return {}
 
     tokens = _split_shell_parts(command)
     expects_command = True
     prefix_allows_options = False
     active_command: str | None = None
+    active_command_prefix_env: dict[str, str] = {}
     declare_exports = False
     pending_assignments: dict[str, str] = {}
-    shell_values: dict[str, str] = {}
-    exported_value: str | None = None
+    shell_values: dict[str, str] = dict(inherited_env or {})
+    exported_values: dict[str, str] = dict(inherited_env or {})
 
     for index, token in enumerate(tokens):
         if index > 0 and _is_command_flag(tokens[index - 1]):
-            nested = _shell_command_exported_env_value_before_target(token, env_var, target)
-            if nested is not None:
+            nested_inherited = dict(exported_values)
+            if active_command_prefix_env:
+                nested_inherited.update(active_command_prefix_env)
+            nested = _shell_command_exported_env_for_target(
+                token,
+                target,
+                inherited_env=nested_inherited,
+            )
+            if nested:
                 return nested
 
         normalized = _normalize_shell_token(token)
@@ -253,11 +266,12 @@ def _shell_command_exported_env_value_before_target(command: str | None, env_var
             expects_command = True
             prefix_allows_options = False
             active_command = None
+            active_command_prefix_env = {}
             declare_exports = False
             continue
 
         if expects_command and normalized == target:
-            return exported_value
+            return dict(exported_values)
 
         if expects_command:
             if token in _COMMAND_POSITION_PREFIX_TOKENS:
@@ -272,9 +286,10 @@ def _shell_command_exported_env_value_before_target(command: str | None, env_var
             expects_command = False
             prefix_allows_options = False
             active_command = os.path.basename(token)
+            active_command_prefix_env = dict(pending_assignments)
             declare_exports = False
             if normalized == target:
-                return exported_value
+                return dict(exported_values)
             if active_command not in {"export", *_EXPORT_STYLE_COMMANDS}:
                 pending_assignments = {}
             continue
@@ -286,16 +301,15 @@ def _shell_command_exported_env_value_before_target(command: str | None, env_var
             if assignment_name is not None:
                 _, value = normalized.split("=", 1)
                 shell_values[assignment_name] = value
-                if assignment_name == env_var:
-                    exported_value = value
+                exported_values[assignment_name] = value
                 continue
-            if normalized == env_var:
-                if env_var in pending_assignments:
-                    value = pending_assignments[env_var]
-                    shell_values[env_var] = value
-                    exported_value = value
-                elif env_var in shell_values:
-                    exported_value = shell_values[env_var]
+            if normalized in pending_assignments:
+                value = pending_assignments[normalized]
+                shell_values[normalized] = value
+                exported_values[normalized] = value
+                continue
+            if normalized in shell_values:
+                exported_values[normalized] = shell_values[normalized]
             continue
 
         if active_command in _EXPORT_STYLE_COMMANDS:
@@ -309,18 +323,23 @@ def _shell_command_exported_env_value_before_target(command: str | None, env_var
             if assignment_name is not None:
                 _, value = normalized.split("=", 1)
                 shell_values[assignment_name] = value
-                if assignment_name == env_var:
-                    exported_value = value
+                exported_values[assignment_name] = value
                 continue
-            if normalized == env_var:
-                if env_var in pending_assignments:
-                    value = pending_assignments[env_var]
-                    shell_values[env_var] = value
-                    exported_value = value
-                elif env_var in shell_values:
-                    exported_value = shell_values[env_var]
+            if normalized in pending_assignments:
+                value = pending_assignments[normalized]
+                shell_values[normalized] = value
+                exported_values[normalized] = value
+                continue
+            if normalized in shell_values:
+                exported_values[normalized] = shell_values[normalized]
 
-    return None
+    return {}
+
+
+def _shell_command_exported_env_value_before_target(command: str | None, env_var: str, target: str) -> str | None:
+    if not env_var:
+        return None
+    return _shell_command_exported_env_for_target(command, target).get(env_var)
 
 
 def _shell_command_exports_env_var_before_target(command: str | None, env_var: str, target: str) -> bool:
@@ -340,6 +359,7 @@ def _shell_command_env_for_target(
     resolved: dict[str, str] = {}
     if isinstance(env, dict):
         resolved.update({str(key): str(value) for key, value in env.items() if value is not None})
+    resolved.update(_shell_command_exported_env_for_target(command, target))
     resolved.update(_shell_command_prefix_env_for_target(command, target))
     return resolved
 

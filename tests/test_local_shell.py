@@ -238,6 +238,26 @@ def test_shell_template_exported_env_var_value_before_command_ignores_bash_env_f
     )
 
 
+def test_shell_template_exported_env_var_value_before_command_detects_export_before_bash_wrapper():
+    assert (
+        shell_template_exported_env_var_value_before_command(
+            "export OPENAI_API_KEY=test-shell-key && bash -lc '{command}'",
+            "OPENAI_API_KEY",
+        )
+        == "test-shell-key"
+    )
+
+
+def test_shell_template_exported_env_var_value_before_command_inherits_outer_export_into_nested_bash_wrapper():
+    assert (
+        shell_template_exported_env_var_value_before_command(
+            "export OPENAI_API_KEY=test-shell-key && sh -c 'bash -lc \"{command}\"'",
+            "OPENAI_API_KEY",
+        )
+        == "test-shell-key"
+    )
+
+
 def test_kimi_shell_init_requires_interactive_bash_warning_uses_home_prefix_for_bash_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1142,6 +1162,24 @@ def test_target_bash_startup_exports_env_var_uses_shell_wrapper_env_and_bash_exe
     assert observed["env"]["HOME"] == str(home)
 
 
+def test_shell_template_exported_env_var_value_before_command_detects_exported_bash_env_before_bash(
+    tmp_path: Path,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    shell_env = home / "shell.env"
+    shell_env.write_text("export ANTHROPIC_API_KEY=from-bash-env\n", encoding="utf-8")
+
+    assert (
+        shell_template_exported_env_var_value_before_command(
+            "export BASH_ENV=$HOME/shell.env && bash -c '{command}'",
+            "ANTHROPIC_API_KEY",
+            home=home,
+        )
+        == "from-bash-env"
+    )
+
+
 @pytest.mark.parametrize("option", ["--rcfile", "--init-file"])
 def test_target_bash_startup_exports_env_var_detects_interactive_bash_rcfile(tmp_path: Path, option: str):
     home = tmp_path / "home"
@@ -1200,6 +1238,24 @@ def test_target_bash_home_uses_exec_prefixed_shell_wrapper_env(tmp_path: Path):
     }
 
     assert target_bash_home(target) == home
+
+
+def test_target_bash_home_uses_exported_home_before_bash(tmp_path: Path):
+    host_home = tmp_path / "host-home"
+    host_home.mkdir()
+    launch_home = tmp_path / "launch-home"
+    launch_home.mkdir()
+    (launch_home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (launch_home / ".bashrc").write_text("export ANTHROPIC_API_KEY=launch-key\n", encoding="utf-8")
+
+    target = {
+        "kind": "local",
+        "shell": f"export HOME={launch_home} && bash -lic '{{command}}'",
+    }
+
+    assert target_bash_home(target, home=host_home) == launch_home
+    assert summarize_target_bash_login_startup(target, home=host_home) == "~/.profile -> ~/.bashrc"
+    assert target_bash_startup_exports_env_var(target, "ANTHROPIC_API_KEY", home=host_home) is True
 
 
 def test_target_bash_home_resolves_indirect_home_from_shell_wrapper_env(tmp_path: Path):
