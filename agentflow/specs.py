@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+from itertools import product
 from collections import Counter
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -78,6 +79,7 @@ _LOCAL_KIMI_BOOTSTRAP_SHELL_INIT = ("command -v kimi >/dev/null 2>&1", "kimi")
 _LOCAL_BOOTSTRAP_TARGET_KEYS = ("shell", "shell_login", "shell_interactive", "shell_init")
 _FANOUT_ALIAS_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _FANOUT_RESERVED_CONTEXT_NAMES = {"fanout", "fanouts", "nodes", "pipeline"}
+_FANOUT_MEMBER_RESERVED_NAMES = {"index", "number", "count", "suffix", "value", "template_id", "node_id"}
 _FANOUT_TEMPLATE_PATTERN = re.compile(r"{{\s*(?P<expr>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*}}")
 
 
@@ -428,6 +430,7 @@ class FanoutSpec(BaseModel):
 
     count: int | None = Field(default=None, ge=1)
     values: list[Any] | None = None
+    matrix: dict[str, list[Any]] | None = None
     as_: str = Field(default="item", alias="as")
 
     @field_validator("values")
@@ -438,6 +441,33 @@ class FanoutSpec(BaseModel):
         if not value:
             raise ValueError("`fanout.values` must contain at least one item")
         return value
+
+    @field_validator("matrix")
+    @classmethod
+    def validate_matrix(cls, value: dict[str, list[Any]] | None) -> dict[str, list[Any]] | None:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("`fanout.matrix` must contain at least one axis")
+
+        normalized: dict[str, list[Any]] = {}
+        for axis_name, axis_values in value.items():
+            axis = axis_name.strip()
+            if not axis:
+                raise ValueError("`fanout.matrix` axis names must not be empty")
+            if not _FANOUT_ALIAS_PATTERN.fullmatch(axis):
+                raise ValueError("`fanout.matrix` axis names must be valid template variable names")
+            if axis in _FANOUT_MEMBER_RESERVED_NAMES:
+                raise ValueError(
+                    "`fanout.matrix` axis names must not use reserved member fields such as "
+                    "`index`, `number`, `count`, `suffix`, `value`, `template_id`, or `node_id`"
+                )
+            if axis in normalized:
+                raise ValueError(f"`fanout.matrix` axis `{axis}` was provided more than once")
+            if not axis_values:
+                raise ValueError(f"`fanout.matrix.{axis}` must contain at least one item")
+            normalized[axis] = axis_values
+        return normalized
 
     @field_validator("as_")
     @classmethod
@@ -456,16 +486,24 @@ class FanoutSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_shape(self) -> "FanoutSpec":
-        if self.count is None and self.values is None:
-            raise ValueError("fanout requires either `count` or `values`")
-        if self.count is not None and self.values is not None:
-            raise ValueError("fanout accepts either `count` or `values`, not both")
+        modes = (
+            self.count is not None,
+            self.values is not None,
+            self.matrix is not None,
+        )
+        selected = sum(modes)
+        if selected == 0:
+            raise ValueError("fanout requires exactly one of `count`, `values`, or `matrix`")
+        if selected > 1:
+            raise ValueError("fanout accepts exactly one of `count`, `values`, or `matrix`")
         return self
 
     @property
     def member_values(self) -> list[Any]:
         if self.values is not None:
             return self.values
+        if self.matrix is not None:
+            return _expand_fanout_matrix(self.matrix)
         if self.count is None:
             return []
         return list(range(self.count))
@@ -474,6 +512,11 @@ class FanoutSpec(BaseModel):
     def member_count(self) -> int:
         if self.values is not None:
             return len(self.values)
+        if self.matrix is not None:
+            count = 1
+            for axis_values in self.matrix.values():
+                count *= len(axis_values)
+            return count
         if self.count is None:
             return 0
         return self.count
@@ -502,6 +545,8 @@ class NodeSpec(BaseModel):
     success_criteria: list[SuccessCriterion] = Field(default_factory=list)
     retries: int = Field(default=0, ge=0)
     retry_backoff_seconds: float = Field(default=1.0, ge=0.0)
+    fanout_group: str | None = Field(default=None, exclude=True)
+    fanout_member: dict[str, Any] | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
     def ensure_unique_dependencies(self) -> "NodeSpec":
@@ -518,6 +563,54 @@ def _fanout_suffix(index: int, count: int) -> str:
     return str(index).zfill(width)
 
 
+def _lift_fanout_member_mapping(
+    member: dict[str, Any],
+    mapping: dict[str, Any],
+    *,
+    strict: bool = False,
+    source: str | None = None,
+) -> None:
+    for key, item in mapping.items():
+        if not isinstance(key, str) or not _FANOUT_ALIAS_PATTERN.fullmatch(key):
+            continue
+        if key in _FANOUT_MEMBER_RESERVED_NAMES:
+            if strict:
+                axis_label = f" axis `{source}`" if source else ""
+                raise ValueError(
+                    f"fanout.matrix{axis_label} item uses reserved lifted key `{key}`; "
+                    "choose a different key name"
+                )
+            continue
+        if key in member:
+            if strict and member[key] != item:
+                axis_label = f" axis `{source}`" if source else ""
+                raise ValueError(
+                    f"fanout.matrix{axis_label} item conflicts on lifted key `{key}`; "
+                    "use distinct field names across axes"
+                )
+            continue
+        member[key] = item
+
+
+def _expand_fanout_matrix(matrix: dict[str, list[Any]]) -> list[dict[str, Any]]:
+    axis_names = list(matrix)
+    axis_values = [matrix[axis_name] for axis_name in axis_names]
+    members: list[dict[str, Any]] = []
+    for combination in product(*axis_values):
+        member: dict[str, Any] = {}
+        for axis_name, axis_value in zip(axis_names, combination):
+            if axis_name in member and member[axis_name] != axis_value:
+                raise ValueError(
+                    f"fanout.matrix axis `{axis_name}` conflicts with another lifted field; "
+                    "rename the axis or the conflicting field"
+                )
+            member[axis_name] = axis_value
+            if isinstance(axis_value, dict):
+                _lift_fanout_member_mapping(member, axis_value, strict=True, source=axis_name)
+        members.append(member)
+    return members
+
+
 def _fanout_iteration_context(template_id: str, fanout: FanoutSpec, index: int, value: Any) -> dict[str, Any]:
     member_count = fanout.member_count
     suffix = _fanout_suffix(index, member_count)
@@ -531,9 +624,7 @@ def _fanout_iteration_context(template_id: str, fanout: FanoutSpec, index: int, 
         "node_id": f"{template_id}_{suffix}",
     }
     if isinstance(value, dict):
-        for key, item in value.items():
-            if isinstance(key, str) and key not in member and _FANOUT_ALIAS_PATTERN.fullmatch(key):
-                member[key] = item
+        _lift_fanout_member_mapping(member, value)
     return {fanout.as_: member, "fanout": member}
 
 
@@ -590,6 +681,8 @@ def _expand_fanout_node(node: dict[str, Any], fanout: FanoutSpec) -> tuple[list[
             raise ValueError(f"fanout node {template_id!r} did not expand into an object")
         member_id = iteration_context["fanout"]["node_id"]
         expanded["id"] = member_id
+        expanded["fanout_group"] = template_id
+        expanded["fanout_member"] = dict(iteration_context["fanout"])
         expanded_nodes.append(expanded)
         member_ids.append(member_id)
     return expanded_nodes, member_ids

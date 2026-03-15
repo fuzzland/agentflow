@@ -184,7 +184,12 @@ _BUNDLED_TEMPLATES = (
     BundledTemplate(
         name="codex-fuzz-matrix",
         example_name="fuzz/codex-fuzz-matrix.yaml",
-        description="Codex fuzz starter that uses `fanout.values` for per-shard targets, sanitizers, and seeds.",
+        description="Codex fuzz starter that uses `fanout.matrix` for target families and sanitizer/seed variants.",
+    ),
+    BundledTemplate(
+        name="codex-fuzz-matrix-128",
+        example_name="fuzz/codex-fuzz-matrix-128.yaml",
+        description="128-shard Codex fuzz matrix that uses `fanout.matrix` for target families, strategies, and seed buckets.",
     ),
     BundledTemplate(
         name="codex-fuzz-swarm",

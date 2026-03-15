@@ -1,7 +1,7 @@
 # Codex fuzz matrix starter
 #
-# This example uses `fanout.values` so each shard can carry its own target,
-# sanitizer, seed, and corpus metadata without hand-written duplicate nodes.
+# This example uses `fanout.matrix` so you can declare reusable target families
+# plus sanitizer/seed variants and let AgentFlow expand the cartesian product.
 #
 # Usage:
 #   agentflow init fuzz-matrix.yaml --template codex-fuzz-matrix
@@ -9,7 +9,7 @@
 #   agentflow run examples/fuzz/codex-fuzz-matrix.yaml --preflight never
 
 name: codex-fuzz-matrix
-description: Codex fuzz starter with per-shard values for targets, sanitizers, and seeds.
+description: Codex fuzz starter with a matrix of target families and sanitizer/seed variants.
 working_dir: ./codex_fuzz_matrix
 concurrency: 8
 
@@ -37,39 +37,21 @@ nodes:
   - id: fuzzer
     fanout:
       as: shard
-      values:
-        - target: libpng
-          sanitizer: asan
-          seed: 1101
-          corpus: png
-        - target: libpng
-          sanitizer: ubsan
-          seed: 1102
-          corpus: png
-        - target: libjpeg
-          sanitizer: asan
-          seed: 2201
-          corpus: jpeg
-        - target: libjpeg
-          sanitizer: ubsan
-          seed: 2202
-          corpus: jpeg
-        - target: freetype
-          sanitizer: asan
-          seed: 3301
-          corpus: fonts
-        - target: freetype
-          sanitizer: ubsan
-          seed: 3302
-          corpus: fonts
-        - target: sqlite
-          sanitizer: asan
-          seed: 4401
-          corpus: sql
-        - target: sqlite
-          sanitizer: ubsan
-          seed: 4402
-          corpus: sql
+      matrix:
+        family:
+          - target: libpng
+            corpus: png
+          - target: libjpeg
+            corpus: jpeg
+          - target: freetype
+            corpus: fonts
+          - target: sqlite
+            corpus: sql
+        variant:
+          - sanitizer: asan
+            seed: 1101
+          - sanitizer: ubsan
+            seed: 1102
     agent: codex
     model: gpt-5-codex
     tools: read_write
@@ -110,7 +92,7 @@ nodes:
       Lead with confirmed or strongest suspected issues, then note repeated weak spots by target and sanitizer.
 
       {% for shard in fanouts.fuzzer.nodes %}
-      ### {{ shard.id }} (status: {{ shard.status }})
+      ### {{ shard.id }} :: {{ shard.target }} / {{ shard.sanitizer }} / seed {{ shard.seed }} (status: {{ shard.status }})
       {{ shard.output or "(no output)" }}
 
       {% endfor %}

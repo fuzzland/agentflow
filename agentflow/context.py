@@ -24,12 +24,16 @@ def build_render_context(pipeline: PipelineSpec, results: dict[str, NodeResult])
     for node_id, result in results.items():
         nodes[node_id] = _node_result_context(result)
 
+    pipeline_nodes = pipeline.node_map
     fanouts: dict[str, Any] = {}
     for group_id, member_ids in pipeline.fanouts.items():
         member_nodes: list[dict[str, Any]] = []
         for member_id in member_ids:
             result = results.get(member_id, NodeResult(node_id=member_id))
             member_context = {"id": member_id, **_node_result_context(result)}
+            pipeline_node = pipeline_nodes.get(member_id)
+            if pipeline_node is not None and pipeline_node.fanout_group == group_id and pipeline_node.fanout_member:
+                member_context.update(pipeline_node.fanout_member)
             member_nodes.append(member_context)
         fanouts[group_id] = {
             "ids": list(member_ids),
@@ -38,6 +42,7 @@ def build_render_context(pipeline: PipelineSpec, results: dict[str, NodeResult])
             "outputs": [member["output"] for member in member_nodes],
             "final_responses": [member["final_response"] for member in member_nodes],
             "statuses": [member["status"] for member in member_nodes],
+            "values": [member.get("value") for member in member_nodes],
         }
     return {"pipeline": pipeline.model_dump(mode="json"), "nodes": nodes, "fanouts": fanouts}
 

@@ -222,7 +222,7 @@ async def test_orchestrator_renders_fanout_values_context_in_merge_prompt(tmp_pa
                     "prompt": (
                         "fanout={{ fanouts.worker.size }} :: "
                         "{% for shard in fanouts.worker.nodes %}"
-                        "{{ shard.id }}={{ shard.output }};"
+                        "{{ shard.id }}={{ shard.target }}:{{ shard.seed }}:{{ shard.output }};"
                         "{% endfor %}"
                     ),
                 },
@@ -237,7 +237,69 @@ async def test_orchestrator_renders_fanout_values_context_in_merge_prompt(tmp_pa
     assert set(completed.nodes) == {"worker_0", "worker_1", "merge"}
     assert completed.nodes["worker_0"].output == "worker libpng seed 1001"
     assert completed.nodes["worker_1"].output == "worker sqlite seed 2002"
-    assert completed.nodes["merge"].output == "fanout=2 :: worker_0=worker libpng seed 1001;worker_1=worker sqlite seed 2002;"
+    assert completed.nodes["merge"].output == (
+        "fanout=2 :: worker_0=libpng:1001:worker libpng seed 1001;"
+        "worker_1=sqlite:2002:worker sqlite seed 2002;"
+    )
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_renders_fanout_matrix_context_in_merge_prompt(tmp_path: Path):
+    orchestrator = make_orchestrator(tmp_path)
+    pipeline = PipelineSpec.model_validate(
+        {
+            "name": "fanout-matrix",
+            "working_dir": str(tmp_path),
+            "concurrency": 4,
+            "nodes": [
+                {
+                    "id": "worker",
+                    "fanout": {
+                        "as": "shard",
+                        "matrix": {
+                            "family": [
+                                {"target": "libpng", "corpus": "png"},
+                                {"target": "sqlite", "corpus": "sql"},
+                            ],
+                            "variant": [
+                                {"sanitizer": "asan", "seed": 1001},
+                                {"sanitizer": "ubsan", "seed": 2002},
+                            ],
+                        },
+                    },
+                    "agent": "codex",
+                    "prompt": "worker {{ shard.target }} {{ shard.sanitizer }} seed {{ shard.seed }}",
+                },
+                {
+                    "id": "merge",
+                    "agent": "codex",
+                    "depends_on": ["worker"],
+                    "prompt": (
+                        "fanout={{ fanouts.worker.size }} :: "
+                        "{% for shard in fanouts.worker.nodes %}"
+                        "{{ shard.id }}={{ shard.family.target }}/{{ shard.variant.seed }}/{{ shard.output }};"
+                        "{% endfor %}"
+                    ),
+                },
+            ],
+        }
+    )
+
+    run = await orchestrator.submit(pipeline)
+    completed = await orchestrator.wait(run.id, timeout=5)
+
+    assert completed.status.value == "completed"
+    assert set(completed.nodes) == {"worker_0", "worker_1", "worker_2", "worker_3", "merge"}
+    assert completed.nodes["worker_0"].output == "worker libpng asan seed 1001"
+    assert completed.nodes["worker_1"].output == "worker libpng ubsan seed 2002"
+    assert completed.nodes["worker_2"].output == "worker sqlite asan seed 1001"
+    assert completed.nodes["worker_3"].output == "worker sqlite ubsan seed 2002"
+    assert completed.nodes["merge"].output == (
+        "fanout=4 :: worker_0=libpng/1001/worker libpng asan seed 1001;"
+        "worker_1=libpng/2002/worker libpng ubsan seed 2002;"
+        "worker_2=sqlite/1001/worker sqlite asan seed 1001;"
+        "worker_3=sqlite/2002/worker sqlite ubsan seed 2002;"
+    )
 
 
 @pytest.mark.asyncio

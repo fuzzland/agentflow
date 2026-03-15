@@ -297,13 +297,82 @@ def test_pipeline_validation_expands_fanout_value_nodes_and_group_dependencies()
     assert [node.id for node in pipeline.nodes] == ["fuzz_0", "fuzz_1", "merge"]
     assert pipeline.nodes[0].prompt == "fuzz libpng with 101 in fuzz_0"
     assert pipeline.nodes[1].prompt == "fuzz sqlite with 202 in fuzz_1"
+    assert pipeline.nodes[0].fanout_group == "fuzz"
+    assert pipeline.nodes[0].fanout_member == {
+        "index": 0,
+        "number": 1,
+        "count": 2,
+        "suffix": "0",
+        "value": {"target": "libpng", "seed": 101},
+        "template_id": "fuzz",
+        "node_id": "fuzz_0",
+        "target": "libpng",
+        "seed": 101,
+    }
     assert pipeline.nodes[0].target.cwd == "agents/libpng_0"
     assert pipeline.nodes[1].target.cwd == "agents/sqlite_1"
     assert pipeline.node_map["merge"].depends_on == ["fuzz_0", "fuzz_1"]
 
 
-def test_pipeline_validation_rejects_fanout_with_both_count_and_values():
-    with pytest.raises(ValueError, match=r"fanout accepts either `count` or `values`, not both"):
+def test_pipeline_validation_expands_fanout_matrix_nodes_and_group_dependencies():
+    pipeline = PipelineSpec.model_validate(
+        {
+            "name": "fanout-matrix-validation",
+            "working_dir": ".",
+            "nodes": [
+                {
+                    "id": "fuzz",
+                    "fanout": {
+                        "as": "shard",
+                        "matrix": {
+                            "family": [
+                                {"target": "libpng", "corpus": "png"},
+                                {"target": "sqlite", "corpus": "sql"},
+                            ],
+                            "variant": [
+                                {"sanitizer": "asan", "seed": 101},
+                                {"sanitizer": "ubsan", "seed": 202},
+                            ],
+                        },
+                    },
+                    "agent": "codex",
+                    "prompt": "fuzz {{ shard.target }} {{ shard.sanitizer }} seed {{ shard.variant.seed }} in {{ shard.node_id }}",
+                    "target": {
+                        "kind": "local",
+                        "cwd": "agents/{{ shard.target }}_{{ shard.sanitizer }}_{{ shard.suffix }}",
+                    },
+                },
+                {
+                    "id": "merge",
+                    "agent": "codex",
+                    "depends_on": ["fuzz"],
+                    "prompt": "merge",
+                },
+            ],
+        }
+    )
+
+    assert pipeline.fanouts == {"fuzz": ["fuzz_0", "fuzz_1", "fuzz_2", "fuzz_3"]}
+    assert [node.id for node in pipeline.nodes] == ["fuzz_0", "fuzz_1", "fuzz_2", "fuzz_3", "merge"]
+    assert pipeline.nodes[0].prompt == "fuzz libpng asan seed 101 in fuzz_0"
+    assert pipeline.nodes[1].prompt == "fuzz libpng ubsan seed 202 in fuzz_1"
+    assert pipeline.nodes[2].prompt == "fuzz sqlite asan seed 101 in fuzz_2"
+    assert pipeline.nodes[3].prompt == "fuzz sqlite ubsan seed 202 in fuzz_3"
+    assert pipeline.nodes[0].fanout_group == "fuzz"
+    assert pipeline.nodes[0].fanout_member is not None
+    assert pipeline.nodes[0].fanout_member["family"] == {"target": "libpng", "corpus": "png"}
+    assert pipeline.nodes[0].fanout_member["variant"] == {"sanitizer": "asan", "seed": 101}
+    assert pipeline.nodes[0].fanout_member["target"] == "libpng"
+    assert pipeline.nodes[0].fanout_member["corpus"] == "png"
+    assert pipeline.nodes[0].fanout_member["sanitizer"] == "asan"
+    assert pipeline.nodes[0].fanout_member["seed"] == 101
+    assert pipeline.nodes[0].target.cwd == "agents/libpng_asan_0"
+    assert pipeline.nodes[3].target.cwd == "agents/sqlite_ubsan_3"
+    assert pipeline.node_map["merge"].depends_on == ["fuzz_0", "fuzz_1", "fuzz_2", "fuzz_3"]
+
+
+def test_pipeline_validation_rejects_fanout_with_multiple_expansion_modes():
+    with pytest.raises(ValueError, match=r"fanout accepts exactly one of `count`, `values`, or `matrix`"):
         PipelineSpec.model_validate(
             {
                 "name": "bad-fanout-shape",
@@ -314,6 +383,29 @@ def test_pipeline_validation_rejects_fanout_with_both_count_and_values():
                         "fanout": {
                             "count": 2,
                             "values": ["a", "b"],
+                            "matrix": {"axis": ["a", "b"]},
+                        },
+                        "agent": "codex",
+                        "prompt": "hi",
+                    }
+                ],
+            }
+        )
+
+
+def test_pipeline_validation_rejects_reserved_fanout_matrix_axis_name():
+    with pytest.raises(ValueError, match=r"fanout\.matrix.*reserved member fields"):
+        PipelineSpec.model_validate(
+            {
+                "name": "bad-fanout-matrix-axis",
+                "working_dir": ".",
+                "nodes": [
+                    {
+                        "id": "fuzz",
+                        "fanout": {
+                            "matrix": {
+                                "suffix": ["a", "b"],
+                            },
                         },
                         "agent": "codex",
                         "prompt": "hi",

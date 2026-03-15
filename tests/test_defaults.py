@@ -19,7 +19,9 @@ def test_bundled_templates_expose_descriptions_and_example_files():
     assert by_name["codex-fanout-repo-sweep"].example_name == "codex-fanout-repo-sweep.yaml"
     assert "8 review shards" in by_name["codex-fanout-repo-sweep"].description
     assert by_name["codex-fuzz-matrix"].example_name == "fuzz/codex-fuzz-matrix.yaml"
-    assert "fanout.values" in by_name["codex-fuzz-matrix"].description
+    assert "fanout.matrix" in by_name["codex-fuzz-matrix"].description
+    assert by_name["codex-fuzz-matrix-128"].example_name == "fuzz/codex-fuzz-matrix-128.yaml"
+    assert "128-shard Codex fuzz matrix" in by_name["codex-fuzz-matrix-128"].description
     assert by_name["codex-fuzz-swarm"].example_name == "fuzz/fuzz_codex_32.yaml"
     assert "defaults to 32 shards" in by_name["codex-fuzz-swarm"].description
     assert tuple(parameter.name for parameter in by_name["codex-fuzz-swarm"].parameters) == (
@@ -100,6 +102,11 @@ def test_bundled_codex_fuzz_matrix_template_is_available():
     assert "\nname: codex-fuzz-matrix\n" in f"\n{load_bundled_template_yaml('codex-fuzz-matrix')}"
 
 
+def test_bundled_codex_fuzz_matrix_128_template_is_available():
+    assert "codex-fuzz-matrix-128" in bundled_template_names()
+    assert "\nname: codex-fuzz-matrix-128\n" in f"\n{load_bundled_template_yaml('codex-fuzz-matrix-128')}"
+
+
 def test_bundled_codex_fuzz_swarm_template_is_available():
     assert "codex-fuzz-swarm" in bundled_template_names()
     assert "\nname: codex-fuzz-swarm-32\n" in f"\n{load_bundled_template_yaml('codex-fuzz-swarm')}"
@@ -144,7 +151,7 @@ def test_bundled_codex_fuzz_swarm_template_accepts_overrides_and_preserves_runti
     assert "000 through 127" in pipeline.node_map["init"].prompt
 
 
-def test_bundled_codex_fuzz_matrix_pipeline_expands_value_fanout_nodes():
+def test_bundled_codex_fuzz_matrix_pipeline_expands_matrix_fanout_nodes():
     pipeline = load_pipeline_from_path(str(bundled_template_path("codex-fuzz-matrix")))
 
     assert pipeline.concurrency == 8
@@ -154,6 +161,9 @@ def test_bundled_codex_fuzz_matrix_pipeline_expands_value_fanout_nodes():
     assert [node.id for node in pipeline.nodes[:3]] == ["init", "fuzzer_0", "fuzzer_1"]
     assert pipeline.node_map["fuzzer_0"].prompt.startswith("You are Codex fuzz shard 1 of 8.")
     assert "Target: libpng" in pipeline.node_map["fuzzer_0"].prompt
+    assert pipeline.node_map["fuzzer_0"].fanout_member is not None
+    assert pipeline.node_map["fuzzer_0"].fanout_member["family"] == {"target": "libpng", "corpus": "png"}
+    assert pipeline.node_map["fuzzer_0"].fanout_member["variant"] == {"sanitizer": "asan", "seed": 1101}
     assert pipeline.node_map["fuzzer_0"].target.cwd.endswith("codex_fuzz_matrix/agents/libpng_asan_0")
     assert pipeline.node_map["merge"].depends_on == [
         "fuzzer_0",
@@ -165,6 +175,21 @@ def test_bundled_codex_fuzz_matrix_pipeline_expands_value_fanout_nodes():
         "fuzzer_6",
         "fuzzer_7",
     ]
+
+
+def test_bundled_codex_fuzz_matrix_128_pipeline_expands_into_128_concrete_nodes():
+    pipeline = load_pipeline_from_path(str(bundled_template_path("codex-fuzz-matrix-128")))
+
+    assert pipeline.concurrency == 32
+    assert len(pipeline.fanouts["fuzzer"]) == 128
+    assert pipeline.fanouts["fuzzer"][:3] == ["fuzzer_000", "fuzzer_001", "fuzzer_002"]
+    assert pipeline.fanouts["fuzzer"][-1] == "fuzzer_127"
+    assert pipeline.node_map["fuzzer_000"].fanout_member is not None
+    assert pipeline.node_map["fuzzer_000"].fanout_member["target"] == "libpng"
+    assert pipeline.node_map["fuzzer_000"].fanout_member["sanitizer"] == "asan"
+    assert pipeline.node_map["fuzzer_000"].target.cwd.endswith("codex_fuzz_matrix_128/agents/libpng_asan_seed_a_000")
+    assert pipeline.node_map["merge"].depends_on[0] == "fuzzer_000"
+    assert pipeline.node_map["merge"].depends_on[-1] == "fuzzer_127"
 
 
 def test_bundled_codex_fanout_repo_sweep_pipeline_expands_into_concrete_nodes():

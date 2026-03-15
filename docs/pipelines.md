@@ -37,7 +37,7 @@ See `examples/airflow_like.py` for a complete runnable example.
 Each node supports:
 
 - `agent`: `codex`, `claude`, or `kimi`
-- `fanout`: expand one node definition into concrete nodes before validation; accepts either `count` or `values`, plus optional `as`
+- `fanout`: expand one node definition into concrete nodes before validation; accepts `count`, `values`, or `matrix`, plus optional `as`
 - `model`: any model string understood by the backend
 - `provider`: a string or a structured provider config with `base_url`, `api_key_env`, headers, and env
 - `tools`: `read_only` or `read_write`
@@ -112,15 +112,49 @@ nodes:
       Fuzz {{ shard.target }} with {{ shard.sanitizer }} using seed {{ shard.seed }}.
 ```
 
+When the metadata is naturally multi-axis, use `fanout.matrix` so AgentFlow builds the cartesian product for you:
+
+```yaml
+nodes:
+  - id: fuzz
+    fanout:
+      as: shard
+      matrix:
+        family:
+          - target: libpng
+            corpus: png
+          - target: sqlite
+            corpus: sql
+        variant:
+          - sanitizer: asan
+            seed: 1101
+          - sanitizer: ubsan
+            seed: 2202
+    agent: codex
+    prompt: |
+      Fuzz {{ shard.target }} with {{ shard.sanitizer }} using seed {{ shard.seed }}.
+
+  - id: merge
+    agent: codex
+    depends_on: [fuzz]
+    prompt: |
+      {% for shard in fanouts.fuzz.nodes %}
+      ## {{ shard.id }} :: {{ shard.target }} / {{ shard.sanitizer }} / {{ shard.seed }}
+      {{ shard.output or "(no output)" }}
+
+      {% endfor %}
+```
+
 Expansion rules:
 
-- A fan-out node accepts exactly one expansion mode: `count` for homogeneous numeric shards or `values` for explicit per-member metadata.
+- A fan-out node accepts exactly one expansion mode: `count` for homogeneous numeric shards, `values` for explicit per-member metadata, or `matrix` for cartesian-product sweeps.
 - A fan-out node with `id: fuzz` and `count: 8` expands to `fuzz_0` through `fuzz_7`. The suffix is zero-padded when the fan-out size needs it, so `count: 128` becomes `fuzz_000` through `fuzz_127`.
 - When `fanout.values` is used, `count` becomes the list length, `value` holds the raw item, and dictionary item keys with identifier-friendly names are also exposed directly on the alias. That lets `{{ shard.value.seed }}` and `{{ shard.seed }}` both work for `values: [{seed: 1101}]`.
+- When `fanout.matrix` is used, AgentFlow expands the cartesian product of every axis in declaration order. Each axis item is available under its axis name, and dictionary axis items also lift their identifier-friendly keys onto the alias. That lets `{{ shard.family.target }}` and `{{ shard.target }}` both work when `family` axis items are dictionaries.
 - `fanout.as` picks the template variable name for pre-validation substitution. AgentFlow currently expands dotted placeholders rooted at that alias or `fanout`, such as `{{ shard.number }}`, `{{ shard.suffix }}`, `{{ fanout.count }}`, `target.cwd: agents/agent_{{ shard.suffix }}`, or `depends_on: ["prepare_{{ shard.suffix }}"]`.
 - Ordinary runtime prompt templates such as `{{ nodes.prepare.output }}` are left intact and still render at execution time.
 - A downstream `depends_on: [fuzz]` expands to all members of the `fuzz` group.
-- During prompt rendering, `fanouts.<group>.nodes` exposes the grouped member outputs with `id`, `status`, `output`, `final_response`, `stdout`, `stderr`, and `trace`, plus convenience lists such as `fanouts.<group>.outputs`.
+- During prompt rendering, `fanouts.<group>.nodes` exposes the grouped member outputs with `id`, `status`, `output`, `final_response`, `stdout`, `stderr`, `trace`, and any preserved fanout member metadata such as `value`, `suffix`, `target`, or `seed`, plus convenience lists such as `fanouts.<group>.outputs` and `fanouts.<group>.values`.
 
 Runtime numeric settings are validated up front: `concurrency` must be at least `1`, `timeout_seconds` must be greater than `0`, and both `retries` and `retry_backoff_seconds` must be non-negative.
 

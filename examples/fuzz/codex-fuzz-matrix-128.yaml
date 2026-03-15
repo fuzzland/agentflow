@@ -1,0 +1,123 @@
+# 128-agent Codex fuzz matrix
+#
+# This example shows how `fanout.matrix` keeps a 128-shard campaign readable by
+# combining a few reusable axes instead of hand-writing 128 separate entries.
+#
+# Usage:
+#   agentflow init fuzz-matrix-128.yaml --template codex-fuzz-matrix-128
+#   agentflow inspect examples/fuzz/codex-fuzz-matrix-128.yaml
+#   agentflow run examples/fuzz/codex-fuzz-matrix-128.yaml --preflight never
+
+name: codex-fuzz-matrix-128
+description: 128-shard Codex fuzz matrix built from target families, strategies, and seed buckets.
+working_dir: ./codex_fuzz_matrix_128
+concurrency: 32
+
+nodes:
+  - id: init
+    agent: codex
+    tools: read_write
+    timeout_seconds: 60
+    prompt: |
+      Create the following directory structure silently if it does not already exist:
+        mkdir -p docs crashes agents
+      If crashes/README.md is missing or empty, create it with:
+        # Crash Registry
+        | Timestamp | Target | Sanitizer | Bucket | Shard | Evidence |
+        |---|---|---|---|---|---|
+      If docs/campaign_notes.md is missing or empty, create it with:
+        # Campaign Notes
+        Use this file only for cross-shard lessons and retargeting guidance.
+      Then respond with exactly: INIT_OK
+
+    success_criteria:
+      - kind: output_contains
+        value: INIT_OK
+
+  - id: fuzzer
+    fanout:
+      as: shard
+      matrix:
+        family:
+          - target: libpng
+            corpus: png
+          - target: libjpeg
+            corpus: jpeg
+          - target: freetype
+            corpus: fonts
+          - target: sqlite
+            corpus: sql
+        strategy:
+          - sanitizer: asan
+            focus: parser
+          - sanitizer: asan
+            focus: structure-aware
+          - sanitizer: ubsan
+            focus: differential
+          - sanitizer: ubsan
+            focus: stateful
+        seed_bucket:
+          - bucket: seed_a
+            seed: 4101
+          - bucket: seed_b
+            seed: 4102
+          - bucket: seed_c
+            seed: 4103
+          - bucket: seed_d
+            seed: 4104
+          - bucket: seed_e
+            seed: 4105
+          - bucket: seed_f
+            seed: 4106
+          - bucket: seed_g
+            seed: 4107
+          - bucket: seed_h
+            seed: 4108
+    agent: codex
+    model: gpt-5-codex
+    tools: read_write
+    depends_on: [init]
+    target:
+      kind: local
+      cwd: agents/{{ shard.target }}_{{ shard.sanitizer }}_{{ shard.bucket }}_{{ shard.suffix }}
+    timeout_seconds: 3600
+    retries: 2
+    retry_backoff_seconds: 2
+    extra_args:
+      - "--search"
+      - "-c"
+      - 'model_reasoning_effort="high"'
+    prompt: |
+      You are Codex fuzz shard {{ shard.number }} of {{ shard.count }} in an authorized campaign.
+
+      Campaign inputs:
+      - Target: {{ shard.target }}
+      - Corpus family: {{ shard.corpus }}
+      - Sanitizer: {{ shard.sanitizer }}
+      - Strategy focus: {{ shard.focus }}
+      - Seed bucket: {{ shard.bucket }}
+      - Seed: {{ shard.seed }}
+      - Workspace: agents/{{ shard.target }}_{{ shard.sanitizer }}_{{ shard.bucket }}_{{ shard.suffix }}
+
+      Shard contract:
+      - Stay within your shard workspace unless you are appending to the shared crash registry or notes.
+      - Use the assigned target family, sanitizer, focus, and seed bucket to keep the campaign reproducible.
+      - Prefer high-signal crashers, assertion failures, memory safety bugs, or logic corruptions.
+      - Record confirmed findings in `crashes/README.md` and copy minimal repro artifacts into `crashes/`.
+      - Add short cross-shard lessons to `docs/campaign_notes.md` when they help other shards avoid duplicate work.
+
+  - id: merge
+    agent: codex
+    model: gpt-5-codex
+    tools: read_only
+    depends_on: [fuzzer]
+    timeout_seconds: 300
+    prompt: |
+      Consolidate this 128-shard fuzz matrix into a maintainer handoff.
+      Group the findings by target family first, then by sanitizer/focus, and end with seed buckets that looked quiet.
+
+      {% for shard in fanouts.fuzzer.nodes %}
+      ### {{ shard.id }} :: {{ shard.target }} / {{ shard.sanitizer }} / {{ shard.focus }} / {{ shard.bucket }} (status: {{ shard.status }})
+      {{ shard.output or "(no output)" }}
+
+      {% endfor %}

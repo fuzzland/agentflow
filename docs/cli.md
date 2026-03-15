@@ -22,6 +22,7 @@ agentflow templates
 agentflow init > pipeline.yaml
 agentflow init repo-sweep.yaml --template codex-fanout-repo-sweep
 agentflow init fuzz-matrix.yaml --template codex-fuzz-matrix
+agentflow init fuzz-matrix-128.yaml --template codex-fuzz-matrix-128
 agentflow init fuzz-swarm.yaml --template codex-fuzz-swarm
 agentflow init fuzz-128.yaml --template codex-fuzz-swarm --set shards=128 --set concurrency=32
 agentflow init kimi-smoke.yaml --template local-kimi-smoke
@@ -30,13 +31,14 @@ agentflow init kimi-shell-wrapper-smoke.yaml --template local-kimi-shell-wrapper
 ```
 
 Use `agentflow templates` to list the bundled starters with short descriptions, example source files, and the matching `agentflow init --template ...` command.
-The default `pipeline` template is a generic Codex/Claude/Kimi DAG. The `codex-fanout-repo-sweep` template shows the compact `fanout` authoring path by expanding one Codex review node into 8 shards plus a merge step, which makes it a good starting point for maintainers who want broader repo sweeps, large audits, or shardable review tasks. The `codex-fuzz-matrix` template shows `fanout.values`, which keeps per-shard targets, sanitizers, and seeds declarative instead of embedding them in duplicated prompts. The `codex-fuzz-swarm` template is the default adaptation path for Codex fuzz campaigns: it renders the checked-in 32-shard starter by default and accepts repeated `--set key=value` overrides such as `shards`, `concurrency`, `name`, and `working_dir` when you want to scale it up or down. The `codex-fuzz-swarm-128` template remains the fixed 128-shard reference example for larger campaigns. The `local-kimi-smoke` template is the same real-agent local Codex plus Claude-on-Kimi smoke DAG used by the repo's verification scripts, so it is a fast way to bootstrap a known-good local setup into your own workspace. When you want that same local smoke flow with explicit `shell: bash`, `shell_login: true`, `shell_interactive: true`, and `shell_init: kimi` wiring instead of the shorthand `bootstrap: kimi`, use the `local-kimi-shell-init-smoke` template. When you want the same flow with an explicit `target.shell: "bash -lic 'command -v kimi >/dev/null 2>&1 && kimi && {command}'"` wrapper, use the `local-kimi-shell-wrapper-smoke` template.
+The default `pipeline` template is a generic Codex/Claude/Kimi DAG. The `codex-fanout-repo-sweep` template shows the compact `fanout` authoring path by expanding one Codex review node into 8 shards plus a merge step, which makes it a good starting point for maintainers who want broader repo sweeps, large audits, or shardable review tasks. The `codex-fuzz-matrix` template shows `fanout.matrix`, which keeps target families and sanitizer/seed variants declarative instead of hand-enumerating every shard. The `codex-fuzz-matrix-128` template is the corresponding full-size 128-shard matrix reference when you want a realistic large heterogeneous campaign to clone. The `codex-fuzz-swarm` template is the default adaptation path for homogeneous Codex fuzz campaigns: it renders the checked-in 32-shard starter by default and accepts repeated `--set key=value` overrides such as `shards`, `concurrency`, `name`, and `working_dir` when you want to scale it up or down. The `codex-fuzz-swarm-128` template remains the fixed 128-shard homogeneous reference example. The `local-kimi-smoke` template is the same real-agent local Codex plus Claude-on-Kimi smoke DAG used by the repo's verification scripts, so it is a fast way to bootstrap a known-good local setup into your own workspace. When you want that same local smoke flow with explicit `shell: bash`, `shell_login: true`, `shell_interactive: true`, and `shell_init: kimi` wiring instead of the shorthand `bootstrap: kimi`, use the `local-kimi-shell-init-smoke` template. When you want the same flow with an explicit `target.shell: "bash -lic 'command -v kimi >/dev/null 2>&1 && kimi && {command}'"` wrapper, use the `local-kimi-shell-wrapper-smoke` template.
 
 Right-size a swarm for the host before you launch it:
 
 ```bash
 agentflow init fuzz-swarm.yaml --template codex-fuzz-swarm
 agentflow init fuzz-128.yaml --template codex-fuzz-swarm --set shards=128 --set concurrency=32
+agentflow init fuzz-matrix-128.yaml --template codex-fuzz-matrix-128
 agentflow inspect fuzz-128.yaml --output summary
 ```
 
@@ -54,6 +56,7 @@ agentflow inspect examples/local-real-agents-kimi-smoke.yaml
 agentflow inspect examples/local-real-agents-kimi-smoke.yaml --output json-summary
 agentflow inspect examples/pipeline.yaml --node review --output json
 agentflow inspect examples/fuzz/codex-fuzz-matrix.yaml --output summary
+agentflow inspect examples/fuzz/codex-fuzz-matrix-128.yaml --output summary
 agentflow inspect examples/fuzz/fuzz_codex_32.yaml --output summary
 agentflow inspect examples/fuzz/fuzz_codex_128.yaml --output summary
 ```
