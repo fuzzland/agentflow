@@ -136,8 +136,7 @@ nodes:
     timeout_seconds: 60
     prompt: |
       Create the following directory structure silently if it does not already exist:
-        mkdir -p docs crashes locks agents
-      For each shard suffix from $suffix_start through $suffix_end, create agents/agent_<suffix>.
+        mkdir -p docs crashes locks
       If crashes/README.md is missing or empty, create it with:
         # Crash Registry
         | Timestamp | Shard | Target | Evidence | Artifact |
@@ -300,9 +299,7 @@ nodes:
     timeout_seconds: 60
     prompt: |
       Create the following directory structure silently if it does not already exist:
-        mkdir -p docs crashes agents
-      Read `$_FUZZ_CATALOG_SUPPORT_FILE` and create every unique workspace listed in the `workspace` column.
-      Do not modify the catalog itself.
+        mkdir -p docs crashes
       If crashes/README.md is missing or empty, create it with:
         # Crash Registry
         | Timestamp | Label | Target | Evidence | Artifact |
@@ -404,6 +401,16 @@ _BUNDLED_TEMPLATES = (
         name="codex-fuzz-matrix",
         example_name="fuzz/codex-fuzz-matrix.yaml",
         description="Codex fuzz starter that uses `fanout.matrix` for target families and sanitizer/seed variants.",
+    ),
+    BundledTemplate(
+        name="codex-fuzz-matrix-derived",
+        example_name="fuzz/codex-fuzz-matrix-derived.yaml",
+        description="Codex fuzz starter that uses `fanout.derive` to compute reusable shard labels and workdirs from matrix inputs.",
+    ),
+    BundledTemplate(
+        name="codex-fuzz-matrix-curated",
+        example_name="fuzz/codex-fuzz-matrix-curated.yaml",
+        description="Curated Codex fuzz matrix that uses `fanout.exclude`, `fanout.include`, and `fanout.derive` to tune real campaigns without a catalog file.",
     ),
     BundledTemplate(
         name="codex-fuzz-matrix-128",

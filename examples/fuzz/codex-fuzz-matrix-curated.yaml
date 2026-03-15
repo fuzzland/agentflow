@@ -1,17 +1,19 @@
-# 128-agent Codex fuzz matrix
+# Curated Codex fuzz matrix
 #
-# This example shows how `fanout.matrix` keeps a 128-shard campaign readable by
-# combining a few reusable axes instead of hand-writing 128 separate entries.
+# This example shows how `fanout.matrix` can stay compact even when a real
+# campaign needs a few exclusions and bespoke shards. Use `exclude` to drop
+# noisy or unsupported combinations, `include` to append hand-picked shards,
+# and `derive` to keep workspace/label boilerplate out of the node body.
 #
 # Usage:
-#   agentflow init fuzz-matrix-128.yaml --template codex-fuzz-matrix-128
-#   agentflow inspect examples/fuzz/codex-fuzz-matrix-128.yaml
-#   agentflow run examples/fuzz/codex-fuzz-matrix-128.yaml --preflight never
+#   agentflow init fuzz-matrix-curated.yaml --template codex-fuzz-matrix-curated
+#   agentflow inspect examples/fuzz/codex-fuzz-matrix-curated.yaml
+#   agentflow run examples/fuzz/codex-fuzz-matrix-curated.yaml --preflight never
 
-name: codex-fuzz-matrix-128
-description: 128-shard Codex fuzz matrix built from target families, strategies, and seed buckets.
-working_dir: ./codex_fuzz_matrix_128
-concurrency: 32
+name: codex-fuzz-matrix-curated
+description: Curated Codex fuzz matrix that prunes invalid combinations and adds bespoke shards without a sidecar catalog.
+working_dir: ./codex_fuzz_matrix_curated
+concurrency: 8
 
 nodes:
   - id: init
@@ -23,8 +25,8 @@ nodes:
         mkdir -p docs crashes
       If crashes/README.md is missing or empty, create it with:
         # Crash Registry
-        | Timestamp | Target | Sanitizer | Bucket | Shard | Evidence |
-        |---|---|---|---|---|---|
+        | Timestamp | Label | Evidence | Artifact |
+        |---|---|---|---|
       If docs/campaign_notes.md is missing or empty, create it with:
         # Campaign Notes
         Use this file only for cross-shard lessons and retargeting guidance.
@@ -41,10 +43,6 @@ nodes:
         family:
           - target: libpng
             corpus: png
-          - target: libjpeg
-            corpus: jpeg
-          - target: freetype
-            corpus: fonts
           - target: sqlite
             corpus: sql
         strategy:
@@ -53,26 +51,40 @@ nodes:
           - sanitizer: asan
             focus: structure-aware
           - sanitizer: ubsan
-            focus: differential
-          - sanitizer: ubsan
             focus: stateful
         seed_bucket:
           - bucket: seed_a
-            seed: 4101
+            seed: 5101
           - bucket: seed_b
-            seed: 4102
+            seed: 5102
           - bucket: seed_c
-            seed: 4103
-          - bucket: seed_d
-            seed: 4104
-          - bucket: seed_e
-            seed: 4105
-          - bucket: seed_f
-            seed: 4106
-          - bucket: seed_g
-            seed: 4107
-          - bucket: seed_h
-            seed: 4108
+            seed: 5103
+      exclude:
+        - target: sqlite
+          focus: structure-aware
+        - family:
+            target: libpng
+          seed_bucket:
+            bucket: seed_c
+      include:
+        - family:
+            target: openssl
+            corpus: tls
+          strategy:
+            sanitizer: asan
+            focus: handshake
+          seed_bucket:
+            bucket: seed_tls_a
+            seed: 9901
+        - family:
+            target: openssl
+            corpus: tls
+          strategy:
+            sanitizer: asan
+            focus: handshake
+          seed_bucket:
+            bucket: seed_tls_b
+            seed: 9902
       derive:
         label: "{{ shard.target }} / {{ shard.sanitizer }} / {{ shard.focus }} / {{ shard.bucket }}"
         workspace: "agents/{{ shard.target }}_{{ shard.sanitizer }}_{{ shard.bucket }}_{{ shard.suffix }}"
@@ -83,25 +95,28 @@ nodes:
     target:
       kind: local
       cwd: "{{ shard.workspace }}"
-    timeout_seconds: 3600
-    retries: 2
+    timeout_seconds: 1800
+    retries: 1
     retry_backoff_seconds: 2
     extra_args:
       - "--search"
-      - "-c"
-      - 'model_reasoning_effort="high"'
     prompt: |
       You are Codex fuzz shard {{ shard.number }} of {{ shard.count }} in an authorized campaign.
 
       Campaign inputs:
+      - Label: {{ shard.label }}
       - Target: {{ shard.target }}
       - Corpus family: {{ shard.corpus }}
       - Sanitizer: {{ shard.sanitizer }}
       - Strategy focus: {{ shard.focus }}
       - Seed bucket: {{ shard.bucket }}
       - Seed: {{ shard.seed }}
-      - Label: {{ shard.label }}
       - Workspace: {{ shard.workspace }}
+
+      Campaign tuning:
+      - Base matrix coverage handles common libpng/sqlite parser and stateful passes.
+      - `fanout.exclude` removes the noisy `sqlite/asan/structure-aware` combinations and the weak libpng `seed_c` bucket.
+      - `fanout.include` adds two bespoke OpenSSL/TLS handshake shards without forcing the whole campaign into a catalog file.
 
       Shard contract:
       - Stay within {{ shard.workspace }} unless you are appending to the shared crash registry or notes.
@@ -117,8 +132,8 @@ nodes:
     depends_on: [fuzzer]
     timeout_seconds: 300
     prompt: |
-      Consolidate this 128-shard fuzz matrix into a maintainer handoff.
-      Group the findings by target family first, then by sanitizer/focus, and end with seed buckets that looked quiet.
+      Consolidate this curated fuzz matrix into a maintainer handoff.
+      Start with strong or confirmed issues, then call out gaps created by excluded combinations, and end with whether the bespoke TLS shards earned a place in the default matrix.
 
       {% for shard in fanouts.fuzzer.nodes %}
       ### {{ shard.label }} :: {{ shard.id }} (status: {{ shard.status }})

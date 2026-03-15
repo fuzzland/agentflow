@@ -21,9 +21,7 @@ nodes:
     timeout_seconds: 60
     prompt: |
       Create the following directory structure silently if it does not already exist:
-        mkdir -p docs crashes agents
-      Read `manifests/codex-fuzz-catalog.csv` and create every unique workspace listed in the `workspace` column.
-      Do not modify the catalog itself.
+        mkdir -p docs crashes
       If crashes/README.md is missing or empty, create it with:
         # Crash Registry
         | Timestamp | Label | Target | Evidence | Artifact |

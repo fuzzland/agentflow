@@ -244,6 +244,69 @@ async def test_orchestrator_renders_fanout_values_context_in_merge_prompt(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_renders_curated_fanout_matrix_context_in_merge_prompt(tmp_path: Path):
+    orchestrator = make_orchestrator(tmp_path)
+    pipeline = PipelineSpec.model_validate(
+        {
+            "name": "fanout-matrix-curated",
+            "working_dir": str(tmp_path),
+            "concurrency": 2,
+            "nodes": [
+                {
+                    "id": "worker",
+                    "fanout": {
+                        "as": "shard",
+                        "matrix": {
+                            "family": [{"target": "libpng"}, {"target": "sqlite"}],
+                            "variant": [{"sanitizer": "asan"}, {"sanitizer": "ubsan"}],
+                        },
+                        "exclude": [{"target": "sqlite", "sanitizer": "ubsan"}],
+                        "include": [
+                            {
+                                "family": {"target": "openssl"},
+                                "variant": {"sanitizer": "asan"},
+                            }
+                        ],
+                        "derive": {
+                            "label": "{{ shard.target }}/{{ shard.sanitizer }}",
+                        },
+                    },
+                    "agent": "codex",
+                    "prompt": "worker {{ shard.label }}",
+                },
+                {
+                    "id": "merge",
+                    "agent": "codex",
+                    "depends_on": ["worker"],
+                    "prompt": (
+                        "fanout={{ fanouts.worker.size }} :: "
+                        "{% for shard in fanouts.worker.nodes %}"
+                        "{{ shard.id }}={{ shard.target }}:{{ shard.sanitizer }}:{{ shard.label }}:{{ shard.output }};"
+                        "{% endfor %}"
+                    ),
+                },
+            ],
+        }
+    )
+
+    run = await orchestrator.submit(pipeline)
+    completed = await orchestrator.wait(run.id, timeout=5)
+
+    assert completed.status.value == "completed"
+    assert set(completed.nodes) == {"worker_0", "worker_1", "worker_2", "worker_3", "merge"}
+    assert completed.nodes["worker_0"].output == "worker libpng/asan"
+    assert completed.nodes["worker_1"].output == "worker libpng/ubsan"
+    assert completed.nodes["worker_2"].output == "worker sqlite/asan"
+    assert completed.nodes["worker_3"].output == "worker openssl/asan"
+    assert completed.nodes["merge"].output == (
+        "fanout=4 :: worker_0=libpng:asan:libpng/asan:worker libpng/asan;"
+        "worker_1=libpng:ubsan:libpng/ubsan:worker libpng/ubsan;"
+        "worker_2=sqlite:asan:sqlite/asan:worker sqlite/asan;"
+        "worker_3=openssl:asan:openssl/asan:worker openssl/asan;"
+    )
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_renders_file_backed_fanout_values_context_in_merge_prompt(tmp_path: Path):
     manifests = tmp_path / "manifests"
     manifests.mkdir()

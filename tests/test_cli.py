@@ -348,7 +348,6 @@ def test_init_command_prints_codex_fuzz_swarm_template():
     assert result.exit_code == 0
     assert "\nname: codex-fuzz-swarm-32\n" in f"\n{result.stdout}"
     assert "count: 32" in result.stdout
-    assert "For each shard suffix from 00 through 31" in result.stdout
 
 
 def test_init_command_prints_custom_codex_fuzz_swarm_template():
@@ -374,7 +373,26 @@ def test_init_command_prints_custom_codex_fuzz_swarm_template():
     assert "working_dir: ./custom_swarm" in result.stdout
     assert "concurrency: 24" in result.stdout
     assert "count: 128" in result.stdout
-    assert "For each shard suffix from 000 through 127" in result.stdout
+
+
+def test_init_command_prints_codex_fuzz_matrix_derived_template():
+    result = runner.invoke(app, ["init", "--template", "codex-fuzz-matrix-derived"])
+
+    assert result.exit_code == 0
+    assert "\nname: codex-fuzz-matrix-derived\n" in f"\n{result.stdout}"
+    assert "\n      derive:\n" in result.stdout
+    assert "label: \"{{ shard.target }}/{{ shard.sanitizer }}/{{ shard.focus }}/seed-{{ shard.seed }}\"" in result.stdout
+    assert "cwd: \"{{ shard.workspace }}\"" in result.stdout
+
+
+def test_init_command_prints_codex_fuzz_matrix_curated_template():
+    result = runner.invoke(app, ["init", "--template", "codex-fuzz-matrix-curated"])
+
+    assert result.exit_code == 0
+    assert "\nname: codex-fuzz-matrix-curated\n" in f"\n{result.stdout}"
+    assert "exclude:" in result.stdout
+    assert "include:" in result.stdout
+    assert "cwd: \"{{ shard.workspace }}\"" in result.stdout
 
 
 def test_init_command_prints_local_kimi_shell_init_smoke_template():
@@ -407,6 +425,10 @@ def test_templates_command_lists_bundled_templates():
         "(source: `examples/codex-fanout-repo-sweep.yaml`; use: `agentflow init --template codex-fanout-repo-sweep`)\n"
         "- codex-fuzz-matrix: Codex fuzz starter that uses `fanout.matrix` for target families and sanitizer/seed variants. "
         "(source: `examples/fuzz/codex-fuzz-matrix.yaml`; use: `agentflow init --template codex-fuzz-matrix`)\n"
+        "- codex-fuzz-matrix-derived: Codex fuzz starter that uses `fanout.derive` to compute reusable shard labels and workdirs from matrix inputs. "
+        "(source: `examples/fuzz/codex-fuzz-matrix-derived.yaml`; use: `agentflow init --template codex-fuzz-matrix-derived`)\n"
+        "- codex-fuzz-matrix-curated: Curated Codex fuzz matrix that uses `fanout.exclude`, `fanout.include`, and `fanout.derive` to tune real campaigns without a catalog file. "
+        "(source: `examples/fuzz/codex-fuzz-matrix-curated.yaml`; use: `agentflow init --template codex-fuzz-matrix-curated`)\n"
         "- codex-fuzz-matrix-128: 128-shard Codex fuzz matrix that uses `fanout.matrix` for target families, strategies, and seed buckets. "
         "(source: `examples/fuzz/codex-fuzz-matrix-128.yaml`; use: `agentflow init --template codex-fuzz-matrix-128`)\n"
         "- codex-fuzz-matrix-manifest-128: 128-shard Codex fuzz matrix that loads its axes from `fanout.matrix_path` for easier maintainer edits. "

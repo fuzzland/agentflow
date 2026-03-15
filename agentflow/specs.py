@@ -443,6 +443,9 @@ class FanoutSpec(BaseModel):
     count: int | None = Field(default=None, ge=1)
     values: list[Any] | None = None
     matrix: dict[str, list[Any]] | None = None
+    include: list[dict[str, Any]] | None = None
+    exclude: list[dict[str, Any]] | None = None
+    derive: dict[str, Any] = Field(default_factory=dict)
     as_: str = Field(default="item", alias="as")
 
     @field_validator("values")
@@ -481,6 +484,44 @@ class FanoutSpec(BaseModel):
             normalized[axis] = axis_values
         return normalized
 
+    @field_validator("include")
+    @classmethod
+    def validate_include(cls, value: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("`fanout.include` must contain at least one item")
+        return [_normalize_fanout_matrix_member(item) for item in value]
+
+    @field_validator("exclude")
+    @classmethod
+    def validate_exclude(cls, value: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("`fanout.exclude` must contain at least one item")
+        return value
+
+    @field_validator("derive")
+    @classmethod
+    def validate_derive(cls, value: dict[str, Any]) -> dict[str, Any]:
+        normalized: dict[str, Any] = {}
+        for field_name, field_value in value.items():
+            if not isinstance(field_name, str):
+                raise ValueError("`fanout.derive` field names must be strings")
+            field = field_name.strip()
+            if not field:
+                raise ValueError("`fanout.derive` field names must not be empty")
+            if not _FANOUT_ALIAS_PATTERN.fullmatch(field):
+                raise ValueError("`fanout.derive` field names must be valid template variable names")
+            if field in _FANOUT_MEMBER_RESERVED_NAMES:
+                raise ValueError(
+                    "`fanout.derive` field names must not use reserved member fields such as "
+                    "`index`, `number`, `count`, `suffix`, `value`, `template_id`, or `node_id`"
+                )
+            normalized[field] = field_value
+        return normalized
+
     @field_validator("as_")
     @classmethod
     def validate_alias(cls, value: str) -> str:
@@ -508,6 +549,14 @@ class FanoutSpec(BaseModel):
             raise ValueError("fanout requires exactly one of `count`, `values`, or `matrix`")
         if selected > 1:
             raise ValueError("fanout accepts exactly one of `count`, `values`, or `matrix`")
+        if (self.include is not None or self.exclude is not None) and self.matrix is None:
+            raise ValueError("`fanout.include` and `fanout.exclude` require `fanout.matrix` or `fanout.matrix_path`")
+        if self.matrix is not None and not _curate_fanout_matrix_members(
+            self.matrix,
+            include=self.include,
+            exclude=self.exclude,
+        ):
+            raise ValueError("`fanout.matrix` produced no members after applying `fanout.exclude`")
         return self
 
     @property
@@ -515,7 +564,7 @@ class FanoutSpec(BaseModel):
         if self.values is not None:
             return self.values
         if self.matrix is not None:
-            return _expand_fanout_matrix(self.matrix)
+            return _curate_fanout_matrix_members(self.matrix, include=self.include, exclude=self.exclude)
         if self.count is None:
             return []
         return list(range(self.count))
@@ -525,10 +574,7 @@ class FanoutSpec(BaseModel):
         if self.values is not None:
             return len(self.values)
         if self.matrix is not None:
-            count = 1
-            for axis_values in self.matrix.values():
-                count *= len(axis_values)
-            return count
+            return len(_curate_fanout_matrix_members(self.matrix, include=self.include, exclude=self.exclude))
         if self.count is None:
             return 0
         return self.count
@@ -623,6 +669,43 @@ def _expand_fanout_matrix(matrix: dict[str, list[Any]]) -> list[dict[str, Any]]:
     return members
 
 
+def _normalize_fanout_matrix_member(value: dict[str, Any]) -> dict[str, Any]:
+    member = dict(value)
+    for key, item in value.items():
+        if isinstance(item, dict):
+            _lift_fanout_member_mapping(member, item, strict=True, source=key)
+    return member
+
+
+def _fanout_member_matches_selector(member: Any, selector: Any) -> bool:
+    if isinstance(selector, dict):
+        if not isinstance(member, dict):
+            return False
+        return all(
+            key in member and _fanout_member_matches_selector(member[key], expected)
+            for key, expected in selector.items()
+        )
+    return member == selector
+
+
+def _curate_fanout_matrix_members(
+    matrix: dict[str, list[Any]],
+    *,
+    include: list[dict[str, Any]] | None = None,
+    exclude: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    members = _expand_fanout_matrix(matrix)
+    if exclude:
+        members = [
+            member
+            for member in members
+            if not any(_fanout_member_matches_selector(member, selector) for selector in exclude)
+        ]
+    if include:
+        members.extend(dict(member) for member in include)
+    return members
+
+
 def _fanout_iteration_context(template_id: str, fanout: FanoutSpec, index: int, value: Any) -> dict[str, Any]:
     member_count = fanout.member_count
     suffix = _fanout_suffix(index, member_count)
@@ -637,7 +720,14 @@ def _fanout_iteration_context(template_id: str, fanout: FanoutSpec, index: int, 
     }
     if isinstance(value, dict):
         _lift_fanout_member_mapping(member, value)
-    return {fanout.as_: member, "fanout": member}
+    context = {fanout.as_: member, "fanout": member}
+    for key, raw_value in fanout.derive.items():
+        if key in member:
+            raise ValueError(
+                f"fanout.derive field `{key}` conflicts with an existing member field; choose a different name"
+            )
+        member[key] = _render_fanout_value(raw_value, context)
+    return context
 
 
 def _render_fanout_value(value: Any, context: dict[str, Any]) -> Any:

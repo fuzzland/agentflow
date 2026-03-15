@@ -432,6 +432,69 @@ def test_pipeline_validation_expands_fanout_matrix_nodes_and_group_dependencies(
     assert pipeline.node_map["merge"].depends_on == ["fuzz_0", "fuzz_1", "fuzz_2", "fuzz_3"]
 
 
+def test_pipeline_validation_expands_fanout_derived_fields():
+    pipeline = PipelineSpec.model_validate(
+        {
+            "name": "fanout-derived-validation",
+            "working_dir": ".",
+            "nodes": [
+                {
+                    "id": "fuzz",
+                    "fanout": {
+                        "as": "shard",
+                        "matrix": {
+                            "family": [
+                                {"target": "libpng", "corpus": "png"},
+                                {"target": "sqlite", "corpus": "sql"},
+                            ],
+                            "variant": [
+                                {"sanitizer": "asan", "seed": 101},
+                                {"sanitizer": "ubsan", "seed": 202},
+                            ],
+                        },
+                        "derive": {
+                            "workspace": "agents/{{ shard.target }}_{{ shard.sanitizer }}_{{ shard.suffix }}",
+                            "label": "{{ shard.target }}/{{ shard.sanitizer }}/{{ shard.seed }}",
+                            "paths": {
+                                "workspace": "{{ shard.workspace }}",
+                                "report": "reports/{{ shard.target }}_{{ shard.suffix }}.md",
+                            },
+                        },
+                    },
+                    "agent": "codex",
+                    "prompt": "fuzz {{ shard.label }} in {{ shard.paths.workspace }}",
+                    "target": {
+                        "kind": "local",
+                        "cwd": "{{ shard.workspace }}",
+                    },
+                },
+                {
+                    "id": "merge",
+                    "agent": "codex",
+                    "depends_on": ["fuzz"],
+                    "prompt": "merge",
+                },
+            ],
+        }
+    )
+
+    assert pipeline.fanouts == {"fuzz": ["fuzz_0", "fuzz_1", "fuzz_2", "fuzz_3"]}
+    assert pipeline.nodes[0].prompt == "fuzz libpng/asan/101 in agents/libpng_asan_0"
+    assert pipeline.nodes[3].prompt == "fuzz sqlite/ubsan/202 in agents/sqlite_ubsan_3"
+    assert pipeline.nodes[0].fanout_member is not None
+    assert pipeline.nodes[0].fanout_member["workspace"] == "agents/libpng_asan_0"
+    assert pipeline.nodes[0].fanout_member["label"] == "libpng/asan/101"
+    assert pipeline.nodes[0].fanout_member["paths"] == {
+        "workspace": "agents/libpng_asan_0",
+        "report": "reports/libpng_0.md",
+    }
+    assert pipeline.nodes[3].fanout_member["workspace"] == "agents/sqlite_ubsan_3"
+    assert pipeline.nodes[3].fanout_member["label"] == "sqlite/ubsan/202"
+    assert pipeline.nodes[0].target.cwd == "agents/libpng_asan_0"
+    assert pipeline.nodes[3].target.cwd == "agents/sqlite_ubsan_3"
+    assert pipeline.node_map["merge"].depends_on == ["fuzz_0", "fuzz_1", "fuzz_2", "fuzz_3"]
+
+
 def test_pipeline_validation_expands_fanout_matrix_path_nodes_and_group_dependencies(tmp_path):
     manifests = tmp_path / "manifests"
     manifests.mkdir()
@@ -493,6 +556,117 @@ variant:
     assert pipeline.node_map["merge"].depends_on == ["fuzz_0", "fuzz_1", "fuzz_2", "fuzz_3"]
 
 
+def test_pipeline_validation_expands_curated_fanout_matrix_nodes_and_group_dependencies():
+    pipeline = PipelineSpec.model_validate(
+        {
+            "name": "fanout-matrix-curated-validation",
+            "working_dir": ".",
+            "nodes": [
+                {
+                    "id": "fuzz",
+                    "fanout": {
+                        "as": "shard",
+                        "matrix": {
+                            "family": [
+                                {"target": "libpng", "corpus": "png"},
+                                {"target": "sqlite", "corpus": "sql"},
+                            ],
+                            "variant": [
+                                {"sanitizer": "asan", "seed": 101},
+                                {"sanitizer": "ubsan", "seed": 202},
+                            ],
+                            "seed_bucket": [
+                                {"bucket": "seed_a"},
+                                {"bucket": "seed_b"},
+                            ],
+                        },
+                        "exclude": [
+                            {
+                                "family": {"target": "sqlite"},
+                                "variant": {"sanitizer": "ubsan"},
+                            }
+                        ],
+                        "include": [
+                            {
+                                "family": {"target": "openssl", "corpus": "tls"},
+                                "variant": {"sanitizer": "asan", "seed": 909},
+                                "seed_bucket": {"bucket": "seed_tls"},
+                            }
+                        ],
+                        "derive": {
+                            "workspace": "agents/{{ shard.target }}_{{ shard.sanitizer }}_{{ shard.bucket }}_{{ shard.suffix }}"
+                        },
+                    },
+                    "agent": "codex",
+                    "prompt": "fuzz {{ shard.target }} {{ shard.sanitizer }} {{ shard.bucket }} {{ shard.workspace }}",
+                    "target": {
+                        "kind": "local",
+                        "cwd": "{{ shard.workspace }}",
+                    },
+                },
+                {
+                    "id": "merge",
+                    "agent": "codex",
+                    "depends_on": ["fuzz"],
+                    "prompt": "merge",
+                },
+            ],
+        }
+    )
+
+    assert pipeline.fanouts == {"fuzz": ["fuzz_0", "fuzz_1", "fuzz_2", "fuzz_3", "fuzz_4", "fuzz_5", "fuzz_6"]}
+    assert [node.id for node in pipeline.nodes] == [
+        "fuzz_0",
+        "fuzz_1",
+        "fuzz_2",
+        "fuzz_3",
+        "fuzz_4",
+        "fuzz_5",
+        "fuzz_6",
+        "merge",
+    ]
+    assert pipeline.node_map["fuzz_0"].prompt == "fuzz libpng asan seed_a agents/libpng_asan_seed_a_0"
+    assert pipeline.node_map["fuzz_5"].prompt == "fuzz sqlite asan seed_b agents/sqlite_asan_seed_b_5"
+    assert pipeline.node_map["fuzz_6"].prompt == "fuzz openssl asan seed_tls agents/openssl_asan_seed_tls_6"
+    assert pipeline.node_map["fuzz_6"].fanout_member == {
+        "index": 6,
+        "number": 7,
+        "count": 7,
+        "suffix": "6",
+        "value": {
+            "family": {"target": "openssl", "corpus": "tls"},
+            "variant": {"sanitizer": "asan", "seed": 909},
+            "seed_bucket": {"bucket": "seed_tls"},
+            "target": "openssl",
+            "corpus": "tls",
+            "sanitizer": "asan",
+            "seed": 909,
+            "bucket": "seed_tls",
+        },
+        "template_id": "fuzz",
+        "node_id": "fuzz_6",
+        "family": {"target": "openssl", "corpus": "tls"},
+        "variant": {"sanitizer": "asan", "seed": 909},
+        "seed_bucket": {"bucket": "seed_tls"},
+        "target": "openssl",
+        "corpus": "tls",
+        "sanitizer": "asan",
+        "seed": 909,
+        "bucket": "seed_tls",
+        "workspace": "agents/openssl_asan_seed_tls_6",
+    }
+    assert pipeline.node_map["fuzz_6"].target.cwd == "agents/openssl_asan_seed_tls_6"
+    assert pipeline.node_map["merge"].depends_on == [
+        "fuzz_0",
+        "fuzz_1",
+        "fuzz_2",
+        "fuzz_3",
+        "fuzz_4",
+        "fuzz_5",
+        "fuzz_6",
+    ]
+
+
 def test_pipeline_validation_rejects_fanout_with_multiple_expansion_modes():
     with pytest.raises(
         ValueError,
@@ -547,6 +721,56 @@ def test_pipeline_validation_rejects_fanout_with_mixed_inline_and_file_backed_mo
         )
 
 
+def test_pipeline_validation_rejects_curated_fanout_without_matrix():
+    with pytest.raises(
+        ValueError,
+        match=r"`fanout.include` and `fanout.exclude` require `fanout.matrix` or `fanout.matrix_path`",
+    ):
+        PipelineSpec.model_validate(
+            {
+                "name": "bad-fanout-curation-shape",
+                "working_dir": ".",
+                "nodes": [
+                    {
+                        "id": "fuzz",
+                        "fanout": {
+                            "count": 2,
+                            "include": [{"target": "libpng"}],
+                        },
+                        "agent": "codex",
+                        "prompt": "hi",
+                    }
+                ],
+            }
+        )
+
+
+def test_pipeline_validation_rejects_curated_fanout_matrix_without_remaining_members():
+    with pytest.raises(
+        ValueError,
+        match=r"`fanout.matrix` produced no members after applying `fanout.exclude`",
+    ):
+        PipelineSpec.model_validate(
+            {
+                "name": "bad-fanout-curation-empty",
+                "working_dir": ".",
+                "nodes": [
+                    {
+                        "id": "fuzz",
+                        "fanout": {
+                            "matrix": {
+                                "family": [{"target": "libpng"}],
+                            },
+                            "exclude": [{"target": "libpng"}],
+                        },
+                        "agent": "codex",
+                        "prompt": "hi",
+                    }
+                ],
+            }
+        )
+
+
 def test_pipeline_validation_rejects_reserved_fanout_matrix_axis_name():
     with pytest.raises(ValueError, match=r"fanout\.matrix.*reserved member fields"):
         PipelineSpec.model_validate(
@@ -559,6 +783,53 @@ def test_pipeline_validation_rejects_reserved_fanout_matrix_axis_name():
                         "fanout": {
                             "matrix": {
                                 "suffix": ["a", "b"],
+                            },
+                        },
+                        "agent": "codex",
+                        "prompt": "hi",
+                    }
+                ],
+            }
+        )
+
+
+def test_pipeline_validation_rejects_reserved_fanout_derive_field_name():
+    with pytest.raises(ValueError, match=r"fanout\.derive.*reserved member fields"):
+        PipelineSpec.model_validate(
+            {
+                "name": "bad-fanout-derive-field",
+                "working_dir": ".",
+                "nodes": [
+                    {
+                        "id": "fuzz",
+                        "fanout": {
+                            "count": 2,
+                            "derive": {
+                                "suffix": "agent_{{ fanout.suffix }}",
+                            },
+                        },
+                        "agent": "codex",
+                        "prompt": "hi",
+                    }
+                ],
+            }
+        )
+
+
+def test_pipeline_validation_rejects_conflicting_fanout_derive_field():
+    with pytest.raises(ValueError, match=r"fanout\.derive field `target` conflicts with an existing member field"):
+        PipelineSpec.model_validate(
+            {
+                "name": "bad-fanout-derive-conflict",
+                "working_dir": ".",
+                "nodes": [
+                    {
+                        "id": "fuzz",
+                        "fanout": {
+                            "as": "shard",
+                            "values": [{"target": "libpng"}],
+                            "derive": {
+                                "target": "sqlite",
                             },
                         },
                         "agent": "codex",

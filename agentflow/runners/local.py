@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import os
 import shlex
+from pathlib import Path
 from contextlib import suppress
 
 from agentflow.local_shell import render_shell_init, shell_wrapper_requires_command_placeholder, target_uses_interactive_bash
 from agentflow.prepared import ExecutionPaths, PreparedExecution
 from agentflow.runners.base import LaunchPlan, RawExecutionResult, Runner, StreamCallback
 from agentflow.specs import LocalTarget, NodeSpec
+from agentflow.utils import ensure_dir
 
 
 class LocalRunner(Runner):
@@ -266,6 +268,7 @@ class LocalRunner(Runner):
         should_cancel,
     ) -> RawExecutionResult:
         self.materialize_runtime_files(paths.host_runtime_dir, prepared.runtime_files)
+        ensure_dir(Path(prepared.cwd))
         launch_env = self._augment_local_env(prepared, paths)
         command, target_env = self._command_for_target(node, prepared)
         launch_env.update(target_env)

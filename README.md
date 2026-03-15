@@ -24,6 +24,8 @@ agentflow templates
 agentflow init > pipeline.yaml
 agentflow init repo-sweep.yaml --template codex-fanout-repo-sweep
 agentflow init fuzz-matrix.yaml --template codex-fuzz-matrix
+agentflow init fuzz-matrix-derived.yaml --template codex-fuzz-matrix-derived
+agentflow init fuzz-matrix-curated.yaml --template codex-fuzz-matrix-curated
 agentflow init fuzz-matrix-128.yaml --template codex-fuzz-matrix-128
 agentflow init fuzz-matrix-manifest-128.yaml --template codex-fuzz-matrix-manifest-128
 agentflow init fuzz-catalog.yaml --template codex-fuzz-catalog
@@ -45,9 +47,11 @@ Choose a starter:
 
 - `codex-fanout-repo-sweep` for repo review and audit fanout
 - `codex-fuzz-matrix` for heterogeneous campaigns built from reusable axes
+- `codex-fuzz-matrix-derived` for heterogeneous campaigns that need reusable shard labels and workdirs
+- `codex-fuzz-matrix-curated` for heterogeneous campaigns that need a few exclusions or bespoke shards without a catalog
 - `codex-fuzz-matrix-128` for a full 128-shard matrix reference
 - `codex-fuzz-matrix-manifest-128` for a 128-shard matrix whose axes live in a sidecar manifest
-- `codex-fuzz-catalog` for spreadsheet-friendly shard catalogs with explicit per-row labels and workdirs
+- `codex-fuzz-catalog` for spreadsheet-friendly shard catalogs with explicit per-row metadata you cannot derive
 - `codex-fuzz-swarm` for homogeneous shard swarms you resize with `--set shards=...`
 
 ## Example
@@ -185,7 +189,62 @@ nodes:
       {% endfor %}
 ```
 
-When the shard catalog or matrix axes need to live outside the main pipeline file, use `fanout.values_path` or `fanout.matrix_path`. `values_path` accepts JSON/YAML lists and CSV files; `matrix_path` accepts JSON/YAML objects. Relative paths resolve from the pipeline file, which keeps large maintainer-owned catalogs easy to retarget without rewriting the reducer or launch settings. CSV-backed catalogs are especially useful when you want to carry precomputed fields like `workspace` and `label` alongside target metadata so large reducers stay short.
+When those shards also need reusable computed metadata such as a label or workdir, add `fanout.derive` so you only define that formula once:
+
+```yaml
+nodes:
+  - id: fuzzer
+    fanout:
+      as: shard
+      matrix:
+        family:
+          - target: libpng
+          - target: sqlite
+        variant:
+          - sanitizer: asan
+            seed: 1101
+          - sanitizer: ubsan
+            seed: 2202
+      derive:
+        label: "{{ shard.target }}/{{ shard.sanitizer }}/{{ shard.seed }}"
+        workspace: "agents/{{ shard.target }}_{{ shard.sanitizer }}_{{ shard.suffix }}"
+    target:
+      kind: local
+      cwd: "{{ shard.workspace }}"
+```
+
+Local runs create missing `target.cwd` directories automatically right before launch, so fan-out examples only need init steps for genuinely shared directories such as `docs/` or `crashes/`.
+
+When a mostly-regular matrix needs a few real-world adjustments, use `fanout.exclude` and `fanout.include` before moving all the way to a CSV catalog:
+
+```yaml
+nodes:
+  - id: fuzzer
+    fanout:
+      as: shard
+      matrix:
+        family:
+          - target: libpng
+          - target: sqlite
+        strategy:
+          - sanitizer: asan
+            focus: parser
+          - sanitizer: ubsan
+            focus: stateful
+      exclude:
+        - target: sqlite
+          focus: stateful
+      include:
+        - family:
+            target: openssl
+          strategy:
+            sanitizer: asan
+            focus: handshake
+      derive:
+        label: "{{ shard.target }}/{{ shard.sanitizer }}/{{ shard.focus }}"
+```
+
+When the shard catalog or matrix axes need to live outside the main pipeline file, use `fanout.values_path` or `fanout.matrix_path`. `values_path` accepts JSON/YAML lists and CSV files; `matrix_path` accepts JSON/YAML objects. Relative paths resolve from the pipeline file, which keeps large maintainer-owned catalogs easy to retarget without rewriting the reducer or launch settings. CSV-backed catalogs are especially useful when you truly need explicit per-row metadata that cannot be derived cleanly from reusable axes.
 
 ```yaml
 nodes:
@@ -198,7 +257,7 @@ nodes:
       Fuzz {{ shard.target }} with {{ shard.sanitizer }} using seed {{ shard.seed }}.
 ```
 
-See `examples/codex-fanout-repo-sweep.yaml` for a bundled maintainer-friendly review template, `examples/fuzz/codex-fuzz-matrix.yaml` for an adaptation-friendly `fanout.matrix` fuzz starter, `examples/fuzz/codex-fuzz-matrix-128.yaml` for a 128-shard inline matrix reference, `examples/fuzz/codex-fuzz-matrix-manifest-128.yaml` for the same scale with external axes, `examples/fuzz/codex-fuzz-catalog.yaml` for a 128-shard CSV-backed shard catalog, `examples/fuzz/fuzz_codex_32.yaml` for the default right-sized Codex fuzz swarm, and `examples/fuzz/fuzz_codex_128.yaml` for the fixed 128-shard homogeneous reference swarm. The fuzz starters are scaffoldable via `agentflow init --template codex-fuzz-matrix`, `agentflow init --template codex-fuzz-matrix-128`, `agentflow init fuzz-matrix-manifest-128.yaml --template codex-fuzz-matrix-manifest-128`, `agentflow init fuzz-catalog.yaml --template codex-fuzz-catalog`, `agentflow init --template codex-fuzz-swarm`, and `agentflow init --template codex-fuzz-swarm --set shards=128 --set concurrency=32`.
+See `examples/codex-fanout-repo-sweep.yaml` for a bundled maintainer-friendly review template, `examples/fuzz/codex-fuzz-matrix.yaml` for a baseline `fanout.matrix` fuzz starter, `examples/fuzz/codex-fuzz-matrix-derived.yaml` for the corresponding `fanout.derive` pattern with reusable labels and workdirs, `examples/fuzz/codex-fuzz-matrix-curated.yaml` for the `fanout.exclude` / `fanout.include` pattern that tunes a matrix without a sidecar catalog, `examples/fuzz/codex-fuzz-matrix-128.yaml` for a 128-shard inline matrix reference, `examples/fuzz/codex-fuzz-matrix-manifest-128.yaml` for the same scale with external axes plus derived shard metadata, `examples/fuzz/codex-fuzz-catalog.yaml` for a 128-shard CSV-backed shard catalog, `examples/fuzz/fuzz_codex_32.yaml` for the default right-sized Codex fuzz swarm, and `examples/fuzz/fuzz_codex_128.yaml` for the fixed 128-shard homogeneous reference swarm. The fuzz starters are scaffoldable via `agentflow init --template codex-fuzz-matrix`, `agentflow init --template codex-fuzz-matrix-derived`, `agentflow init --template codex-fuzz-matrix-curated`, `agentflow init --template codex-fuzz-matrix-128`, `agentflow init fuzz-matrix-manifest-128.yaml --template codex-fuzz-matrix-manifest-128`, `agentflow init fuzz-catalog.yaml --template codex-fuzz-catalog`, `agentflow init --template codex-fuzz-swarm`, and `agentflow init --template codex-fuzz-swarm --set shards=128 --set concurrency=32`.
 
 ## Docs
 

@@ -22,8 +22,7 @@ nodes:
     timeout_seconds: 60
     prompt: |
       Create the following directory structure silently if it does not already exist:
-        mkdir -p docs crashes locks agents
-      For each shard suffix from 00 through 31, create agents/agent_<suffix>.
+        mkdir -p docs crashes locks
       If crashes/README.md is missing or empty, create it with:
         # Crash Registry
         | Timestamp | Shard | Target | Evidence | Artifact |

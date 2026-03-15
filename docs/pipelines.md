@@ -37,7 +37,7 @@ See `examples/airflow_like.py` for a complete runnable example.
 Each node supports:
 
 - `agent`: `codex`, `claude`, or `kimi`
-- `fanout`: expand one node definition into concrete nodes before validation; accepts `count`, `values`, `values_path`, `matrix`, or `matrix_path`, plus optional `as`
+- `fanout`: expand one node definition into concrete nodes before validation; accepts `count`, `values`, `values_path`, `matrix`, or `matrix_path`, plus optional `as`, `derive`, and matrix-only `include` / `exclude`
 - `model`: any model string understood by the backend
 - `provider`: a string or a structured provider config with `base_url`, `api_key_env`, headers, and env
 - `tools`: `read_only` or `read_write`
@@ -112,6 +112,62 @@ nodes:
       Fuzz {{ shard.target }} with {{ shard.sanitizer }} using seed {{ shard.seed }}.
 ```
 
+When you need reusable computed shard metadata such as labels, workdirs, or report paths, add `fanout.derive`. AgentFlow renders those fields during fan-out expansion and preserves them everywhere the member metadata is exposed.
+
+```yaml
+nodes:
+  - id: fuzz
+    fanout:
+      as: shard
+      matrix:
+        family:
+          - target: libpng
+          - target: sqlite
+        variant:
+          - sanitizer: asan
+            seed: 1101
+          - sanitizer: ubsan
+            seed: 2202
+      derive:
+        label: "{{ shard.target }}/{{ shard.sanitizer }}/{{ shard.seed }}"
+        workspace: "agents/{{ shard.target }}_{{ shard.sanitizer }}_{{ shard.suffix }}"
+    agent: codex
+    target:
+      kind: local
+      cwd: "{{ shard.workspace }}"
+    prompt: |
+      Fuzz {{ shard.label }} inside {{ shard.workspace }}.
+```
+
+When a mostly-regular matrix needs a few real-world adjustments, keep the reusable axes and add `fanout.exclude` plus `fanout.include` before moving all the way to a CSV catalog:
+
+```yaml
+nodes:
+  - id: fuzz
+    fanout:
+      as: shard
+      matrix:
+        family:
+          - target: libpng
+          - target: sqlite
+        strategy:
+          - sanitizer: asan
+            focus: parser
+          - sanitizer: ubsan
+            focus: stateful
+      exclude:
+        - target: sqlite
+          focus: stateful
+      include:
+        - family:
+            target: openssl
+          strategy:
+            sanitizer: asan
+            focus: handshake
+      derive:
+        label: "{{ shard.target }}/{{ shard.sanitizer }}/{{ shard.focus }}"
+```
+
 When that metadata already lives in a maintainer-owned file, point `fanout.values_path` or `fanout.matrix_path` at it instead of inlining the whole catalog in the pipeline. `values_path` accepts JSON/YAML lists and CSV rows; `matrix_path` accepts JSON/YAML objects with axis lists. Relative paths resolve from the pipeline file, not from `working_dir`.
 
 ```yaml
@@ -125,7 +181,7 @@ nodes:
       Fuzz {{ shard.target }} with seed {{ shard.seed }}.
 ```
 
-CSV-backed `values_path` catalogs are a good fit when you want each row to carry derived fields such as a per-shard workspace, a reducer label, or another maintainer-owned identifier alongside the target metadata. The bundled [`examples/fuzz/codex-fuzz-catalog.yaml`](/home/shou/agentflow/examples/fuzz/codex-fuzz-catalog.yaml) example and `agentflow init fuzz-catalog.yaml --template codex-fuzz-catalog` scaffold both use that pattern so a large 128-shard campaign can be retargeted by editing [`examples/fuzz/manifests/codex-fuzz-catalog.csv`](/home/shou/agentflow/examples/fuzz/manifests/codex-fuzz-catalog.csv) instead of touching the reducer or launch settings.
+CSV-backed `values_path` catalogs are a good fit when each shard genuinely needs explicit per-row metadata that cannot be derived cleanly from reusable axes. The bundled [`examples/fuzz/codex-fuzz-catalog.yaml`](/home/shou/agentflow/examples/fuzz/codex-fuzz-catalog.yaml) example and `agentflow init fuzz-catalog.yaml --template codex-fuzz-catalog` scaffold both use that pattern so a large 128-shard campaign can be retargeted by editing [`examples/fuzz/manifests/codex-fuzz-catalog.csv`](/home/shou/agentflow/examples/fuzz/manifests/codex-fuzz-catalog.csv) instead of touching the reducer or launch settings.
 
 ```yaml
 nodes:
@@ -179,10 +235,13 @@ Expansion rules:
 - `fanout.values_path` behaves the same way after AgentFlow loads the referenced list or CSV rows.
 - When `fanout.matrix` is used, AgentFlow expands the cartesian product of every axis in declaration order. Each axis item is available under its axis name, and dictionary axis items also lift their identifier-friendly keys onto the alias. That lets `{{ shard.family.target }}` and `{{ shard.target }}` both work when `family` axis items are dictionaries.
 - `fanout.matrix_path` behaves the same way after AgentFlow loads the referenced JSON/YAML object.
+- `fanout.exclude` removes matrix members whose metadata matches every field in a selector object. Selectors can match lifted fields such as `target` / `focus` or nested axis objects such as `family.target`.
+- `fanout.include` appends explicit matrix-style members after exclusions, which is useful for bespoke shards or for adding back one-off combinations without rewriting the whole campaign as a catalog.
+- `fanout.derive` can add computed member fields after the base `count`, `values`, `values_path`, `matrix`, or `matrix_path` expansion has been resolved. Derived fields render in declaration order, so later derived fields can reference earlier ones.
 - `fanout.as` picks the template variable name for pre-validation substitution. AgentFlow currently expands dotted placeholders rooted at that alias or `fanout`, such as `{{ shard.number }}`, `{{ shard.suffix }}`, `{{ fanout.count }}`, `target.cwd: agents/agent_{{ shard.suffix }}`, or `depends_on: ["prepare_{{ shard.suffix }}"]`.
 - Ordinary runtime prompt templates such as `{{ nodes.prepare.output }}` are left intact and still render at execution time.
 - A downstream `depends_on: [fuzz]` expands to all members of the `fuzz` group.
-- During prompt rendering, `fanouts.<group>.nodes` exposes the grouped member outputs with `id`, `status`, `output`, `final_response`, `stdout`, `stderr`, `trace`, and any preserved fanout member metadata such as `value`, `suffix`, `target`, or `seed`, plus convenience lists such as `fanouts.<group>.outputs` and `fanouts.<group>.values`.
+- During prompt rendering, `fanouts.<group>.nodes` exposes the grouped member outputs with `id`, `status`, `output`, `final_response`, `stdout`, `stderr`, `trace`, and any preserved fanout member metadata such as `value`, `suffix`, `target`, `seed`, `workspace`, or `label`, plus convenience lists such as `fanouts.<group>.outputs` and `fanouts.<group>.values`.
 
 Runtime numeric settings are validated up front: `concurrency` must be at least `1`, `timeout_seconds` must be greater than `0`, and both `retries` and `retry_backoff_seconds` must be non-negative.
 
@@ -209,7 +268,7 @@ That default `-c` behavior applies to `{command}` templates too, so wrappers suc
 When the wrapper starts with `env -i`, AgentFlow now preserves the prepared launch env by inlining those variables into the `env` command itself, and it still applies `shell_login` / `shell_interactive` to the real shell executable rather than mistaking wrapper flags such as `env -i` for shell flags.
 For Bash specifically, use `-c` and either `-i` or `shell_interactive: true`; Bash accepts `--login`, but not `--command` or `--interactive`, and AgentFlow now rejects those invalid wrappers during validation instead of failing later at launch time.
 
-`target.cwd` controls the local node working directory. Absolute paths are used as-is; relative paths are resolved from the pipeline `working_dir`. File-based success criteria such as `file_exists`, `file_contains`, and `file_nonempty` are evaluated from that resolved local node working directory.
+`target.cwd` controls the local node working directory. Absolute paths are used as-is; relative paths are resolved from the pipeline `working_dir`. AgentFlow creates that local directory right before launch when it does not already exist, which keeps fan-out shard workdirs easy to derive without adding manual bootstrap steps. File-based success criteria such as `file_exists`, `file_contains`, and `file_nonempty` are evaluated from that resolved local node working directory.
 
 The local-shell bootstrap fields `shell_login`, `shell_interactive`, and `shell_init` require `target.shell`. For the common Kimi helper case, `target.bootstrap: kimi` expands to the same `bash` + login + interactive + `shell_init` setup automatically.
 

@@ -52,6 +52,32 @@ async def test_local_runner_uses_configured_shell(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_local_runner_creates_missing_workdir(tmp_path: Path):
+    workdir = tmp_path / "agents" / "agent_007"
+
+    node = NodeSpec.model_validate(
+        {
+            "id": "alpha-workdir",
+            "agent": "codex",
+            "prompt": "hi",
+        }
+    )
+    prepared = PreparedExecution(
+        command=["bash", "-lc", "pwd"],
+        env={},
+        cwd=str(workdir),
+        trace_kind="codex",
+    )
+
+    result = await LocalRunner().execute(node, prepared, _paths(tmp_path), _noop_output, lambda: False)
+
+    assert result.exit_code == 0
+    assert workdir.is_dir()
+    assert result.stdout_lines == [str(workdir)]
+    assert result.stderr_lines == []
+
+
+@pytest.mark.asyncio
 async def test_local_runner_supports_exec_prefixed_shell_wrapper(tmp_path: Path):
     shell_env = tmp_path / "shell.env"
     shell_env.write_text("myagent(){ printf 'exec wrapper ok\\n'; }\n", encoding="utf-8")

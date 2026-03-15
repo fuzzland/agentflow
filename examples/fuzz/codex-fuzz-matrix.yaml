@@ -20,7 +20,7 @@ nodes:
     timeout_seconds: 60
     prompt: |
       Create the following directory structure silently if it does not already exist:
-        mkdir -p docs crashes agents
+        mkdir -p docs crashes
       If crashes/README.md is missing or empty, create it with:
         # Crash Registry
         | Timestamp | Target | Sanitizer | Shard | Evidence |
@@ -52,13 +52,16 @@ nodes:
             seed: 1101
           - sanitizer: ubsan
             seed: 1102
+      derive:
+        label: "{{ shard.target }} / {{ shard.sanitizer }} / seed {{ shard.seed }}"
+        workspace: "agents/{{ shard.target }}_{{ shard.sanitizer }}_{{ shard.suffix }}"
     agent: codex
     model: gpt-5-codex
     tools: read_write
     depends_on: [init]
     target:
       kind: local
-      cwd: agents/{{ shard.target }}_{{ shard.sanitizer }}_{{ shard.suffix }}
+      cwd: "{{ shard.workspace }}"
     timeout_seconds: 1800
     retries: 1
     retry_backoff_seconds: 2
@@ -72,11 +75,12 @@ nodes:
       - Sanitizer: {{ shard.sanitizer }}
       - Seed: {{ shard.seed }}
       - Corpus family: {{ shard.corpus }}
-      - Workspace: agents/{{ shard.target }}_{{ shard.sanitizer }}_{{ shard.suffix }}
+      - Label: {{ shard.label }}
+      - Workspace: {{ shard.workspace }}
 
       Shard contract:
-      - Stay within your shard workspace unless you are appending to the shared crash registry or notes.
-      - Use the assigned target, sanitizer, and seed to keep the campaign reproducible.
+      - Stay within {{ shard.workspace }} unless you are appending to the shared crash registry or notes.
+      - Use the label, target, sanitizer, and seed to keep the campaign reproducible.
       - Prefer high-signal crashers, assertion failures, memory safety bugs, or logic corruptions.
       - Record confirmed findings in `crashes/README.md` and copy minimal repro artifacts into `crashes/`.
       - Add short cross-shard lessons to `docs/campaign_notes.md` when they help other shards.
@@ -92,7 +96,7 @@ nodes:
       Lead with confirmed or strongest suspected issues, then note repeated weak spots by target and sanitizer.
 
       {% for shard in fanouts.fuzzer.nodes %}
-      ### {{ shard.id }} :: {{ shard.target }} / {{ shard.sanitizer }} / seed {{ shard.seed }} (status: {{ shard.status }})
+      ### {{ shard.label }} :: {{ shard.id }} (status: {{ shard.status }})
       {{ shard.output or "(no output)" }}
 
       {% endfor %}

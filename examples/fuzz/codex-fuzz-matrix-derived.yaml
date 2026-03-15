@@ -1,18 +1,17 @@
-# 128-agent Codex fuzz matrix with external axes
+# Codex fuzz matrix starter with derived shard metadata
 #
-# This example keeps the pipeline logic in one file and the shard axes in a
-# sidecar manifest while deriving reusable shard labels and workdirs from those
-# compact axes.
+# This example shows how `fanout.derive` keeps heterogeneous campaigns compact
+# by computing reusable shard labels and workdirs from a small matrix.
 #
 # Usage:
-#   agentflow init fuzz-matrix-manifest-128.yaml --template codex-fuzz-matrix-manifest-128
-#   agentflow inspect fuzz-matrix-manifest-128.yaml --output summary
-#   agentflow run fuzz-matrix-manifest-128.yaml --preflight never
+#   agentflow init fuzz-matrix-derived.yaml --template codex-fuzz-matrix-derived
+#   agentflow inspect examples/fuzz/codex-fuzz-matrix-derived.yaml
+#   agentflow run examples/fuzz/codex-fuzz-matrix-derived.yaml --preflight never
 
-name: codex-fuzz-matrix-manifest-128
-description: 128-shard Codex fuzz matrix that loads reusable axes from an external manifest file and derives labels plus workdirs.
-working_dir: ./codex_fuzz_matrix_manifest_128
-concurrency: 32
+name: codex-fuzz-matrix-derived
+description: Codex fuzz starter that derives reusable shard labels and workdirs from a compact matrix.
+working_dir: ./codex_fuzz_matrix_derived
+concurrency: 8
 
 nodes:
   - id: init
@@ -28,7 +27,7 @@ nodes:
         |---|---|---|---|
       If docs/campaign_notes.md is missing or empty, create it with:
         # Campaign Notes
-        Use this file only for cross-shard lessons and retargeting guidance.
+        Use this file only for cross-shard lessons.
       Then respond with exactly: INIT_OK
 
     success_criteria:
@@ -38,10 +37,23 @@ nodes:
   - id: fuzzer
     fanout:
       as: shard
-      matrix_path: manifests/codex-fuzz-matrix-manifest-128.axes.yaml
+      matrix:
+        family:
+          - target: libpng
+            corpus: png
+          - target: sqlite
+            corpus: sql
+        variant:
+          - sanitizer: asan
+            seed: 1101
+          - sanitizer: ubsan
+            seed: 2202
+        strategy:
+          - focus: parser
+          - focus: differential
       derive:
-        label: "{{ shard.target }}/{{ shard.sanitizer }}/{{ shard.focus }}/{{ shard.bucket }}"
-        workspace: "agents/{{ shard.target }}_{{ shard.sanitizer }}_{{ shard.bucket }}_{{ shard.suffix }}"
+        label: "{{ shard.target }}/{{ shard.sanitizer }}/{{ shard.focus }}/seed-{{ shard.seed }}"
+        workspace: "agents/{{ shard.target }}_{{ shard.sanitizer }}_{{ shard.focus }}_{{ shard.suffix }}"
     agent: codex
     model: gpt-5-codex
     tools: read_write
@@ -49,32 +61,29 @@ nodes:
     target:
       kind: local
       cwd: "{{ shard.workspace }}"
-    timeout_seconds: 3600
-    retries: 2
+    timeout_seconds: 1800
+    retries: 1
     retry_backoff_seconds: 2
     extra_args:
       - "--search"
-      - "-c"
-      - 'model_reasoning_effort="high"'
     prompt: |
-      You are Codex fuzz shard {{ shard.number }} of {{ shard.count }} in an authorized campaign.
+      You are Codex fuzz shard {{ shard.number }} of {{ shard.count }}.
 
       Campaign inputs:
       - Label: {{ shard.label }}
       - Target: {{ shard.target }}
-      - Corpus family: {{ shard.corpus }}
       - Sanitizer: {{ shard.sanitizer }}
       - Strategy focus: {{ shard.focus }}
-      - Seed bucket: {{ shard.bucket }}
       - Seed: {{ shard.seed }}
+      - Corpus family: {{ shard.corpus }}
       - Workspace: {{ shard.workspace }}
 
       Shard contract:
       - Stay within {{ shard.workspace }} unless you are appending to the shared crash registry or notes.
-      - Use the label, target family, sanitizer, focus, and seed bucket to keep the campaign reproducible.
+      - Use the label, target, sanitizer, focus, and seed to keep the campaign reproducible.
       - Prefer high-signal crashers, assertion failures, memory safety bugs, or logic corruptions.
       - Record confirmed findings in `crashes/README.md` and copy minimal repro artifacts into `crashes/`.
-      - Add short cross-shard lessons to `docs/campaign_notes.md` when they help other shards avoid duplicate work.
+      - Add short cross-shard lessons to `docs/campaign_notes.md` when they help other shards.
 
   - id: merge
     agent: codex
@@ -83,8 +92,8 @@ nodes:
     depends_on: [fuzzer]
     timeout_seconds: 300
     prompt: |
-      Consolidate this 128-shard manifest-backed fuzz matrix into a maintainer handoff.
-      Group the findings by target family first, then by sanitizer/focus, and end with seed buckets that looked quiet.
+      Consolidate this fuzz matrix into a maintainer handoff.
+      Lead with confirmed or strongest suspected issues, then note repeated weak spots by derived label.
 
       {% for shard in fanouts.fuzzer.nodes %}
       ### {{ shard.label }} :: {{ shard.id }} (status: {{ shard.status }})

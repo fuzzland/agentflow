@@ -186,6 +186,38 @@ nodes:
     assert pipeline.nodes[1].target.cwd == str((workspace / "agents" / "sqlite" / "1").resolve())
 
 
+def test_load_pipeline_from_text_expands_fanout_derived_fields_before_resolving_relative_cwds(tmp_path):
+    workspace = tmp_path / "workspace"
+    pipeline = load_pipeline_from_text(
+        """name: fanout-derived-loader
+working_dir: .
+nodes:
+  - id: fuzz
+    fanout:
+      count: 2
+      as: shard
+      derive:
+        workspace: agents/agent_{{ shard.suffix }}
+    agent: codex
+    prompt: shard {{ shard.workspace }}
+    target:
+      kind: local
+      cwd: "{{ shard.workspace }}"
+""",
+        base_dir=workspace,
+    )
+
+    assert pipeline.fanouts == {"fuzz": ["fuzz_0", "fuzz_1"]}
+    assert [node.id for node in pipeline.nodes] == ["fuzz_0", "fuzz_1"]
+    assert pipeline.nodes[0].prompt == "shard agents/agent_0"
+    assert pipeline.nodes[1].prompt == "shard agents/agent_1"
+    assert pipeline.nodes[0].fanout_member is not None
+    assert pipeline.nodes[0].fanout_member["workspace"] == "agents/agent_0"
+    assert pipeline.nodes[1].fanout_member["workspace"] == "agents/agent_1"
+    assert pipeline.nodes[0].target.cwd == str((workspace / "agents" / "agent_0").resolve())
+    assert pipeline.nodes[1].target.cwd == str((workspace / "agents" / "agent_1").resolve())
+
+
 def test_load_pipeline_from_text_expands_fanout_matrix_before_resolving_relative_cwds(tmp_path):
     workspace = tmp_path / "workspace"
     pipeline = load_pipeline_from_text(
