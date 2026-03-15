@@ -197,6 +197,20 @@ nodes:
 
 `fanout.preset` expands the same family/strategy/seed-bucket roster as `codex_fuzz_campaign_matrix(...)`, including default `label` and `workspace` fields. Add outer `fanout.derive` when you want to override or extend those computed values, and pair it with `fanout.batches` when 128-shard runs should stay readable in a single YAML file. The bundled [`examples/fuzz/codex-fuzz-preset-batched.yaml`](/home/shou/agentflow/examples/fuzz/codex-fuzz-preset-batched.yaml) example demonstrates that pattern.
 
+The Python DSL now exposes the matching `fanout_preset(...)` helper, so you can keep preset-backed DAGs in Python without materializing the matrix axes yourself:
+
+```python
+from agentflow import fanout_preset
+
+fanout = fanout_preset(
+    preset="browser-surface",
+    bucket_count=8,
+    as_="shard",
+)
+```
+
+Use `extra_axes={...}` when the reusable preset needs one more dimension, and layer outer `derive={...}` on top when that new axis should participate in `label`, `workspace`, or reducer-specific fields.
+
 For large fan-outs, prompt rendering also exposes reducer-friendly fanout subsets and counts. `fanouts.<group>.summary` carries per-status totals plus `with_output` / `without_output`, while `fanouts.<group>.completed`, `failed`, `with_output`, and `without_output` each expose the same `ids`, `size`, `nodes`, `outputs`, `final_responses`, `statuses`, and `values` fields as the full group.
 
 ```yaml

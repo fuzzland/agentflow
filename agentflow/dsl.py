@@ -5,7 +5,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 import json
 from os import PathLike
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
 
@@ -243,6 +243,47 @@ def fanout_matrix_path(
 ) -> dict[str, Any]:
     return _fanout_payload(
         {"matrix_path": str(path)},
+        as_=as_,
+        derive=derive,
+        include=include,
+        exclude=exclude,
+    )
+
+
+def fanout_preset(
+    preset: str | None = None,
+    *,
+    as_: str = "item",
+    bucket_count: int | None = None,
+    label_template: str | None = None,
+    workspace_template: str | None = None,
+    seed_start: int | None = None,
+    seed_label_prefix: str | None = None,
+    seed_label_width: int | None = None,
+    extra_axes: Mapping[str, list[Any]] | None = None,
+    derive: dict[str, Any] | None = None,
+    include: list[dict[str, Any]] | None = None,
+    exclude: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    preset_payload: dict[str, Any] = {}
+    if preset is not None:
+        preset_payload["name"] = preset
+    if bucket_count is not None:
+        preset_payload["bucket_count"] = bucket_count
+    if label_template is not None:
+        preset_payload["label_template"] = label_template
+    if workspace_template is not None:
+        preset_payload["workspace_template"] = workspace_template
+    if seed_start is not None:
+        preset_payload["seed_start"] = seed_start
+    if seed_label_prefix is not None:
+        preset_payload["seed_label_prefix"] = seed_label_prefix
+    if seed_label_width is not None:
+        preset_payload["seed_label_width"] = seed_label_width
+    if extra_axes is not None:
+        preset_payload["extra_axes"] = dict(extra_axes)
+    return _fanout_payload(
+        {"preset": preset_payload},
         as_=as_,
         derive=derive,
         include=include,

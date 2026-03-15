@@ -1,9 +1,9 @@
-from agentflow import DAG, codex, codex_fuzz_campaign_matrix, fanout_batches
+from agentflow import DAG, codex, fanout_batches, fanout_preset
 
 
 with DAG(
     "airflow-like-fuzz-preset-batched-128",
-    description="Python-authored 128-shard browser-surface Codex fuzz campaign using the preset matrix helper.",
+    description="Python-authored 128-shard browser-surface Codex fuzz campaign using the native preset helper.",
     working_dir="./codex_fuzz_python_preset_batched_128",
     concurrency=32,
     fail_fast=True,
@@ -45,7 +45,7 @@ with DAG(
 
     fuzzer = codex(
         task_id="fuzzer",
-        fanout=codex_fuzz_campaign_matrix(
+        fanout=fanout_preset(
             preset="browser-surface",
             bucket_count=8,
             as_="shard",

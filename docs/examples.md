@@ -34,7 +34,8 @@ The fixed `*-128` examples are reference snapshots when you want to inspect a fu
 | `airflow_like.py` | You want the smallest Python-authored DAG reference. | Static dependencies with `plan >> [implement, review]`. |
 | `airflow_like_fuzz_batched.py` | You want a 128-shard Codex swarm authored from Python instead of YAML templates. | `DAG(node_defaults=..., agent_defaults=..., fail_fast=...)`, `fanout_count(...)`, `fanout_batches(...)`, `dag.to_yaml()`. |
 | `airflow_like_fuzz_campaign.py` | You want the shortest preset-backed Python path to a production-shaped 128-shard Codex campaign. | `codex_fuzz_campaign(...)`, built-in `protocol-stack` roster, grouped reducers, one helper call. |
-| `airflow_like_fuzz_preset_batched.py` | You want a preset-backed 128-shard Codex campaign from Python without rewriting the full matrix axes. | `codex_fuzz_campaign_matrix(...)`, built-in `browser-surface` roster, `fanout_batches(...)`, `dag.to_yaml()`. |
+| `airflow_like_fuzz_preset_batched.py` | You want a preset-backed 128-shard Codex campaign from Python without rewriting the full matrix axes. | `fanout_preset(...)`, built-in `browser-surface` roster, `fanout_batches(...)`, `dag.to_yaml()`. |
+| `airflow_like_fuzz_preset_grouped.py` | You want to adapt a built-in preset to a new 128-shard campaign shape with one extra axis and family reducers. | `fanout_preset(...)`, `extra_axes`, outer `derive`, `fanout_group_by(...)`. |
 | `airflow_like_fuzz_catalog_batched.py` | You want a 128-shard Python DAG backed by a CSV shard catalog plus neutral staged reducers. | `fanout_values_path(...)`, `fanout_batches(...)`, `dag.to_yaml()`. |
 | `airflow_like_fuzz_grouped.py` | You want a 128-shard grouped Codex campaign from Python with reducer-local summaries. | `fanout_matrix(...)`, `fanout_group_by(...)`, `current.scope`. |
 
@@ -55,5 +56,6 @@ The fixed `*-128` examples are reference snapshots when you want to inspect a fu
 - Use `agentflow template-presets` plus `--set preset=...` when you want a realistic starting roster such as `browser-surface` or `protocol-stack` before hand-tuning the generated manifests or CSV files.
 - Use `airflow_like_fuzz_campaign.py` when you want the helper to register the whole preset-backed campaign shape for you instead of wiring `init`, `fuzzer`, reducers, and `merge` by hand.
 - Use `airflow_like_fuzz_preset_batched.py` when you want those same preset rosters directly from Python instead of going through a rendered YAML scaffold first.
+- Use `airflow_like_fuzz_preset_grouped.py` when the built-in preset is close, but you still need one more campaign axis such as `lane`, `environment`, or `coverage_tier`.
 - Use `codex-fuzz-catalog-batched` when the catalog rows need intermediate reducers but there is no stable family field worth grouping on.
 - Prefer the manifest-backed starters when the shard roster or reducer roster should live in sidecar files that non-authors can edit.
