@@ -1,5 +1,3 @@
-import json
-
 from agentflow import DAG, codex, fanout_group_by, fanout_matrix
 
 
@@ -169,4 +167,4 @@ with DAG(
     fuzzer >> family_merge
     family_merge >> merge
 
-print(json.dumps(dag.to_payload(), indent=2))
+print(dag.to_yaml(), end="")

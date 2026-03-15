@@ -1375,6 +1375,211 @@ nodes:
     )
 
 
+def _render_codex_fuzz_catalog_batched_template(values: Mapping[str, str] | None = None) -> RenderedBundledTemplate:
+    template_name = "codex-fuzz-catalog-batched"
+    raw_values = dict(values or {})
+    allowed = {"shards", "batch_size", "concurrency", "name", "working_dir"}
+    _validate_template_settings(template_name, raw_values, allowed=allowed)
+
+    shards = _parse_positive_template_int(
+        template_name,
+        "shards",
+        raw_values.get("shards", str(_DEFAULT_FUZZ_CATALOG_SHARDS)),
+    )
+    batch_size = _parse_positive_template_int(
+        template_name,
+        "batch_size",
+        raw_values.get("batch_size", str(_DEFAULT_FUZZ_BATCHED_BATCH_SIZE)),
+    )
+    concurrency = _parse_positive_template_int(
+        template_name,
+        "concurrency",
+        raw_values.get("concurrency", str(_DEFAULT_FUZZ_CATALOG_CONCURRENCY)),
+    )
+    name = _template_string_value(
+        template_name,
+        "name",
+        raw_values.get("name"),
+        default=f"codex-fuzz-catalog-batched-{shards}",
+    )
+    working_dir = _template_string_value(
+        template_name,
+        "working_dir",
+        raw_values.get("working_dir"),
+        default=f"./codex_fuzz_catalog_batched_{shards}",
+    )
+    batch_count = max(1, (shards + batch_size - 1) // batch_size)
+
+    rendered_yaml = Template(
+        """# Configurable batched Codex fuzz catalog
+#
+# This scaffold keeps shard metadata in a sidecar CSV, but uses neutral batched
+# reducers instead of family-derived reducers. Use it when every shard needs
+# explicit per-row metadata and a single final reducer would be too noisy, but
+# the catalog does not have a meaningful `group_by` family.
+#
+# Usage:
+#   agentflow init fuzz-catalog-batched.yaml --template codex-fuzz-catalog-batched
+#   agentflow init fuzz-catalog-batched-64.yaml --template codex-fuzz-catalog-batched --set shards=64 --set batch_size=8 --set concurrency=16
+#   agentflow inspect fuzz-catalog-batched.yaml --output summary
+#   agentflow run fuzz-catalog-batched.yaml --preflight never
+
+name: $name
+description: Configurable $shards-shard Codex fuzz campaign backed by a CSV shard catalog with automatic $batch_count-way batched reducers.
+working_dir: $working_dir
+concurrency: $concurrency
+
+nodes:
+  - id: init
+    agent: codex
+    tools: read_write
+    timeout_seconds: 60
+    prompt: |
+      Create the following directory structure silently if it does not already exist:
+        mkdir -p docs crashes
+      If crashes/README.md is missing or empty, create it with:
+        # Crash Registry
+        | Timestamp | Label | Target | Evidence | Artifact |
+        |---|---|---|---|---|
+      If docs/campaign_notes.md is missing or empty, create it with:
+        # Campaign Notes
+        Use this file only for cross-shard lessons and retargeting guidance.
+      Then respond with exactly: INIT_OK
+
+    success_criteria:
+      - kind: output_contains
+        value: INIT_OK
+
+  - id: fuzzer
+    fanout:
+      as: shard
+      values_path: $_FUZZ_CATALOG_SUPPORT_FILE
+    agent: codex
+    model: gpt-5-codex
+    tools: read_write
+    depends_on: [init]
+    target:
+      kind: local
+      cwd: "{{ shard.workspace }}"
+    timeout_seconds: 3600
+    retries: 2
+    retry_backoff_seconds: 2
+    extra_args:
+      - "--search"
+      - "-c"
+      - 'model_reasoning_effort="high"'
+    prompt: |
+      You are Codex fuzz shard {{ shard.number }} of {{ shard.count }} in an authorized campaign.
+
+      Campaign inputs:
+      - Catalog label: {{ shard.label }}
+      - Target: {{ shard.target }}
+      - Corpus family: {{ shard.corpus }}
+      - Sanitizer: {{ shard.sanitizer }}
+      - Strategy focus: {{ shard.focus }}
+      - Seed bucket: {{ shard.bucket }}
+      - Seed: {{ shard.seed }}
+      - Workspace: {{ shard.workspace }}
+
+      Shard contract:
+      - Stay within {{ shard.workspace }} unless you are appending to the shared crash registry or notes.
+      - Treat `$_FUZZ_CATALOG_SUPPORT_FILE` as the source of truth for your assignment.
+      - Use the catalog label, target family, sanitizer, focus, and seed bucket to keep the campaign reproducible.
+      - Prefer high-signal crashers, assertion failures, memory safety bugs, or logic corruptions.
+      - Record confirmed findings in `crashes/README.md` and copy minimal repro artifacts into `crashes/`.
+      - Add short cross-shard lessons to `docs/campaign_notes.md` when they help other shards avoid duplicate work.
+
+  - id: batch_merge
+    fanout:
+      as: batch
+      batches:
+        from: fuzzer
+        size: $batch_size
+    agent: codex
+    model: gpt-5-codex
+    tools: read_only
+    depends_on: [fuzzer]
+    timeout_seconds: 300
+    prompt: |
+      Prepare the maintainer handoff for catalog batch {{ current.number }} of {{ current.count }}.
+
+      Batch coverage:
+      - Source group: {{ current.source_group }}
+      - Total source shards: {{ current.source_count }}
+      - Batch size: {{ current.scope.size }}
+      - Shard range: {{ current.start_number }} through {{ current.end_number }}
+      - Shard ids: {{ current.scope.ids | join(", ") }}
+      - Completed shards: {{ current.scope.summary.completed }}
+      - Failed shards: {{ current.scope.summary.failed }}
+      - Silent shards: {{ current.scope.summary.without_output }}
+
+      Group the strongest findings by target family first, then by sanitizer/focus, and end with the catalog rows that need retargeting.
+
+      {% for shard in current.scope.with_output.nodes %}
+      ### {{ shard.label }} :: {{ shard.node_id }} (status: {{ shard.status }})
+      Workspace: {{ shard.workspace }}
+      {{ shard.output }}
+
+      {% endfor %}
+      {% if current.scope.failed.size %}
+      Failed catalog rows:
+      {% for shard in current.scope.failed.nodes %}
+      - {{ shard.id }} :: {{ shard.label }}
+      {% endfor %}
+      {% endif %}
+      {% if not current.scope.with_output.size %}
+      No shard in this batch produced reducer-ready output. Say that explicitly and use the failed shard list to suggest retargeting.
+      {% endif %}
+
+  - id: merge
+    agent: codex
+    model: gpt-5-codex
+    tools: read_only
+    depends_on: [batch_merge]
+    timeout_seconds: 300
+    prompt: |
+      Consolidate this $shards-shard catalog-backed fuzz campaign into a maintainer handoff.
+      Start with campaign-wide status, then the strongest batch-level findings, and end with quiet or failed catalog rows that need retargeting.
+
+      Campaign status:
+      - Total shards: {{ fanouts.fuzzer.size }}
+      - Completed shards: {{ fanouts.fuzzer.summary.completed }}
+      - Failed shards: {{ fanouts.fuzzer.summary.failed }}
+      - Silent shards: {{ fanouts.fuzzer.summary.without_output }}
+      - Batch reducers completed: {{ fanouts.batch_merge.summary.completed }} / {{ fanouts.batch_merge.size }}
+
+      {% for batch in fanouts.batch_merge.with_output.nodes %}
+      ## Batch {{ batch.number }} :: {{ batch.start_number }}-{{ batch.end_number }} (status: {{ batch.status }})
+      {{ batch.output }}
+
+      {% endfor %}
+      {% if fanouts.batch_merge.without_output.size %}
+      Batch reducers needing attention:
+      {% for batch in fanouts.batch_merge.without_output.nodes %}
+      - {{ batch.id }} :: shards {{ batch.start_number }}-{{ batch.end_number }} (status: {{ batch.status }})
+      {% endfor %}
+      {% endif %}
+"""
+    ).substitute(
+        name=name,
+        shards=shards,
+        batch_size=batch_size,
+        batch_count=batch_count,
+        working_dir=working_dir,
+        concurrency=concurrency,
+        _FUZZ_CATALOG_SUPPORT_FILE=_FUZZ_CATALOG_SUPPORT_FILE,
+    )
+    return RenderedBundledTemplate(
+        yaml=rendered_yaml,
+        support_files=(
+            RenderedBundledTemplateFile(
+                relative_path=_FUZZ_CATALOG_SUPPORT_FILE,
+                content=_render_codex_fuzz_catalog_csv(shards),
+            ),
+        ),
+    )
+
+
 def _render_codex_fuzz_catalog_grouped_template(values: Mapping[str, str] | None = None) -> RenderedBundledTemplate:
     template_name = "codex-fuzz-catalog-grouped"
     raw_values = dict(values or {})
@@ -1768,6 +1973,39 @@ _BUNDLED_TEMPLATES = (
         support_files=(_FUZZ_CATALOG_SUPPORT_FILE,),
     ),
     BundledTemplate(
+        name="codex-fuzz-catalog-batched",
+        example_name="fuzz/codex-fuzz-catalog-batched.yaml",
+        description="Configurable Codex fuzz campaign backed by a CSV shard catalog with neutral `fanout.batches` reducers for large explicit shard rosters.",
+        parameters=(
+            BundledTemplateParameter(
+                name="shards",
+                description="Number of catalog rows and Codex fuzz workers to render.",
+                default=str(_DEFAULT_FUZZ_CATALOG_SHARDS),
+            ),
+            BundledTemplateParameter(
+                name="batch_size",
+                description="Number of catalog rows each intermediate reducer should own.",
+                default=str(_DEFAULT_FUZZ_BATCHED_BATCH_SIZE),
+            ),
+            BundledTemplateParameter(
+                name="concurrency",
+                description="Maximum number of shards to run in parallel.",
+                default=str(_DEFAULT_FUZZ_CATALOG_CONCURRENCY),
+            ),
+            BundledTemplateParameter(
+                name="name",
+                description="Pipeline name override.",
+                default="codex-fuzz-catalog-batched-<shards>",
+            ),
+            BundledTemplateParameter(
+                name="working_dir",
+                description="Pipeline working directory override.",
+                default="./codex_fuzz_catalog_batched_<shards>",
+            ),
+        ),
+        support_files=(_FUZZ_CATALOG_SUPPORT_FILE,),
+    ),
+    BundledTemplate(
         name="codex-fuzz-catalog-grouped",
         example_name="fuzz/codex-fuzz-catalog-grouped.yaml",
         description="Configurable hierarchical Codex fuzz campaign backed by a CSV shard catalog and staged reducers derived via `fanout.group_by`.",
@@ -1884,6 +2122,7 @@ _BUNDLED_TEMPLATE_RENDERERS = {
     "codex-fuzz-hierarchical-manifest": _render_codex_fuzz_hierarchical_template,
     "codex-fuzz-matrix-manifest": _render_codex_fuzz_matrix_manifest_template,
     "codex-fuzz-catalog": _render_codex_fuzz_catalog_template,
+    "codex-fuzz-catalog-batched": _render_codex_fuzz_catalog_batched_template,
     "codex-fuzz-catalog-grouped": _render_codex_fuzz_catalog_grouped_template,
     "codex-fuzz-batched": _render_codex_fuzz_batched_template,
     "codex-fuzz-swarm": _render_codex_fuzz_swarm_template,

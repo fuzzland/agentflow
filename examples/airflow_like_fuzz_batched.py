@@ -1,5 +1,3 @@
-import json
-
 from agentflow import DAG, codex, fanout_batches, fanout_count
 
 
@@ -129,4 +127,4 @@ with DAG(
     fuzzer >> batch_merge
     batch_merge >> merge
 
-print(json.dumps(dag.to_payload(), indent=2))
+print(dag.to_yaml(), end="")

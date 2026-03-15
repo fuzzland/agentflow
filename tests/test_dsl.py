@@ -2,7 +2,17 @@ from pathlib import Path
 import subprocess
 import sys
 
-from agentflow import DAG, claude, codex, fanout_batches, fanout_count, fanout_group_by, fanout_matrix, kimi
+from agentflow import (
+    DAG,
+    claude,
+    codex,
+    fanout_batches,
+    fanout_count,
+    fanout_group_by,
+    fanout_matrix,
+    fanout_values_path,
+    kimi,
+)
 from agentflow.loader import load_pipeline_from_text
 
 
@@ -232,6 +242,94 @@ def test_airflow_like_dag_supports_grouped_fanout_helpers():
     assert nodes["merge"].depends_on == ["family_merge_0", "family_merge_1"]
 
 
+def test_airflow_like_dag_can_render_json_and_yaml():
+    with DAG(
+        "render-demo",
+        description="render helpers",
+        working_dir="/tmp/render-demo",
+        node_defaults={"tools": "read_only"},
+    ) as dag:
+        codex(task_id="plan", prompt="line one\nline two")
+
+    rendered_json = dag.to_json()
+    rendered_yaml = dag.to_yaml()
+    spec_from_json = load_pipeline_from_text(rendered_json)
+    spec_from_yaml = load_pipeline_from_text(rendered_yaml)
+
+    assert '"description": "render helpers"' in rendered_json
+    assert '"working_dir": "/tmp/render-demo"' in rendered_json
+    assert "description: render helpers\n" in rendered_yaml
+    assert "working_dir: /tmp/render-demo\n" in rendered_yaml
+    assert "node_defaults:\n  tools: read_only\n" in rendered_yaml
+    assert "prompt: |-" in rendered_yaml
+    assert "line one" in rendered_yaml
+    assert "line two" in rendered_yaml
+    assert spec_from_json.name == "render-demo"
+    assert spec_from_json.node_map["plan"].prompt == "line one\nline two"
+    assert spec_from_yaml.name == "render-demo"
+    assert spec_from_yaml.node_map["plan"].prompt == "line one\nline two"
+
+
+def test_airflow_like_dag_supports_values_path_and_batch_fanout_helpers(tmp_path):
+    workspace = tmp_path / "workspace"
+    catalog_path = workspace / "catalog.csv"
+    catalog_path.parent.mkdir(parents=True)
+    catalog_path.write_text(
+        (
+            "label,target,corpus,sanitizer,focus,bucket,seed,workspace\n"
+            "libpng/asan/parser/seed_001,libpng,png,asan,parser,seed_001,4101,agents/libpng_asan_seed_001_0\n"
+            "sqlite/ubsan/stateful/seed_001,sqlite,sql,ubsan,stateful,seed_001,4101,agents/sqlite_ubsan_seed_001_1\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with DAG(
+        "catalog-batched",
+        working_dir=str(workspace),
+        concurrency=4,
+        node_defaults={
+            "agent": "codex",
+            "tools": "read_only",
+        },
+        agent_defaults={
+            "codex": {
+                "model": "gpt-5-codex",
+            }
+        },
+    ) as dag:
+        init = codex(task_id="init", prompt="init", tools="read_write")
+        fuzzer = codex(
+            task_id="fuzzer",
+            prompt="fuzz {{ shard.label }} inside {{ shard.workspace }}",
+            fanout=fanout_values_path(catalog_path, as_="shard"),
+            tools="read_write",
+            target={"cwd": "{{ shard.workspace }}"},
+        )
+        batch_merge = codex(
+            task_id="batch_merge",
+            prompt="reduce {{ current.scope.ids | join(', ') }}",
+            fanout=fanout_batches("fuzzer", 1, as_="batch"),
+        )
+        merge = codex(task_id="merge", prompt="merge")
+        init >> fuzzer
+        fuzzer >> batch_merge
+        batch_merge >> merge
+
+    spec = dag.to_spec()
+    nodes = spec.node_map
+
+    assert spec.fanouts == {
+        "fuzzer": ["fuzzer_0", "fuzzer_1"],
+        "batch_merge": ["batch_merge_0", "batch_merge_1"],
+    }
+    assert nodes["fuzzer_0"].prompt == "fuzz libpng/asan/parser/seed_001 inside agents/libpng_asan_seed_001_0"
+    assert nodes["fuzzer_0"].target.cwd == "agents/libpng_asan_seed_001_0"
+    assert nodes["fuzzer_1"].fanout_member["target"] == "sqlite"
+    assert nodes["batch_merge_0"].depends_on == ["fuzzer_0"]
+    assert nodes["batch_merge_0"].fanout_member["member_ids"] == ["fuzzer_0"]
+    assert nodes["merge"].depends_on == ["batch_merge_0", "batch_merge_1"]
+
+
 def test_airflow_like_fuzz_batched_example_emits_valid_pipeline():
     repo_root = Path(__file__).resolve().parents[1]
     completed = subprocess.run(
@@ -275,3 +373,27 @@ def test_airflow_like_fuzz_grouped_example_emits_valid_pipeline():
     assert spec.node_map["family_merge_0"].depends_on == spec.fanouts["fuzzer"][:32]
     assert spec.node_map["family_merge_0"].fanout_member["member_ids"] == spec.fanouts["fuzzer"][:32]
     assert spec.node_map["merge"].depends_on == spec.fanouts["family_merge"]
+
+
+def test_airflow_like_fuzz_catalog_batched_example_emits_valid_pipeline():
+    repo_root = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [sys.executable, str(repo_root / "examples" / "airflow_like_fuzz_catalog_batched.py")],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+    )
+
+    spec = load_pipeline_from_text(completed.stdout, base_dir=repo_root)
+
+    assert spec.name == "airflow-like-fuzz-catalog-batched-128"
+    assert spec.fail_fast is True
+    assert spec.concurrency == 32
+    assert len(spec.fanouts["fuzzer"]) == 128
+    assert len(spec.fanouts["batch_merge"]) == 8
+    assert spec.node_map["fuzzer_000"].target.cwd.endswith(
+        "/codex_fuzz_python_catalog_batched_128/agents/libpng_asan_seed_001_000"
+    )
+    assert spec.node_map["batch_merge_0"].depends_on == spec.fanouts["fuzzer"][:16]
+    assert spec.node_map["merge"].depends_on == spec.fanouts["batch_merge"]

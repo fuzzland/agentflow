@@ -87,6 +87,16 @@ def test_bundled_templates_expose_descriptions_and_example_files():
         "name",
         "working_dir",
     )
+    assert by_name["codex-fuzz-catalog-batched"].example_name == "fuzz/codex-fuzz-catalog-batched.yaml"
+    assert "fanout.batches" in by_name["codex-fuzz-catalog-batched"].description
+    assert by_name["codex-fuzz-catalog-batched"].support_files == ("manifests/codex-fuzz-catalog.csv",)
+    assert tuple(parameter.name for parameter in by_name["codex-fuzz-catalog-batched"].parameters) == (
+        "shards",
+        "batch_size",
+        "concurrency",
+        "name",
+        "working_dir",
+    )
     assert by_name["codex-fuzz-catalog-grouped"].example_name == "fuzz/codex-fuzz-catalog-grouped.yaml"
     assert "fanout.group_by" in by_name["codex-fuzz-catalog-grouped"].description
     assert by_name["codex-fuzz-catalog-grouped"].support_files == ("manifests/codex-fuzz-catalog-grouped.csv",)
@@ -600,6 +610,91 @@ def test_bundled_codex_fuzz_catalog_template_accepts_overrides_and_renders_suppo
     assert pipeline.node_map["merge"].depends_on[-1] == "fuzzer_47"
 
 
+def test_bundled_codex_fuzz_catalog_batched_template_is_available():
+    assert "codex-fuzz-catalog-batched" in bundled_template_names()
+    assert "\nname: codex-fuzz-catalog-batched-128\n" in (
+        f"\n{load_bundled_template_yaml('codex-fuzz-catalog-batched')}"
+    )
+    assert bundled_template_support_files("codex-fuzz-catalog-batched") == ("manifests/codex-fuzz-catalog.csv",)
+
+
+def test_bundled_codex_fuzz_catalog_batched_template_matches_default_example_files():
+    expected_yaml = bundled_template_path("codex-fuzz-catalog-batched").read_text(encoding="utf-8")
+    expected_catalog = (
+        bundled_template_path("codex-fuzz-catalog-batched").parent / "manifests" / "codex-fuzz-catalog.csv"
+    ).read_text(encoding="utf-8")
+    rendered = render_bundled_template("codex-fuzz-catalog-batched")
+
+    assert rendered.yaml == expected_yaml
+    assert len(rendered.support_files) == 1
+    assert rendered.support_files[0].relative_path == "manifests/codex-fuzz-catalog.csv"
+    assert rendered.support_files[0].content == expected_catalog
+
+
+def test_bundled_codex_fuzz_catalog_batched_template_accepts_overrides_and_renders_support_file(tmp_path):
+    rendered = render_bundled_template(
+        "codex-fuzz-catalog-batched",
+        values={
+            "shards": "48",
+            "batch_size": "8",
+            "concurrency": "12",
+            "name": "custom-catalog-batched-48",
+            "working_dir": "./custom_catalog_batched",
+        },
+    )
+
+    assert "name: custom-catalog-batched-48\n" in rendered.yaml
+    assert "working_dir: ./custom_catalog_batched\n" in rendered.yaml
+    assert "concurrency: 12\n" in rendered.yaml
+    assert "values_path: manifests/codex-fuzz-catalog.csv" in rendered.yaml
+    assert "batches:" in rendered.yaml
+    assert "size: 8" in rendered.yaml
+    assert rendered.support_files[0].relative_path == "manifests/codex-fuzz-catalog.csv"
+    rendered_rows = rendered.support_files[0].content.strip().splitlines()
+    assert len(rendered_rows) == 49
+    assert rendered_rows[0] == "label,target,corpus,sanitizer,focus,bucket,seed,workspace"
+    assert rendered_rows[1].startswith("libpng/asan/parser/seed_001,libpng,png,asan,parser,seed_001,4101,agents/")
+    assert rendered_rows[-1].startswith(
+        "sqlite/ubsan/stateful/seed_003,sqlite,sql,ubsan,stateful,seed_003,4103,agents/"
+    )
+
+    pipeline_path = tmp_path / "custom-catalog-batched.yaml"
+    pipeline_path.write_text(rendered.yaml, encoding="utf-8")
+    support_path = tmp_path / rendered.support_files[0].relative_path
+    support_path.parent.mkdir(parents=True, exist_ok=True)
+    support_path.write_text(rendered.support_files[0].content, encoding="utf-8")
+    pipeline = load_pipeline_from_path(str(pipeline_path))
+
+    assert pipeline.concurrency == 12
+    assert len(pipeline.fanouts["fuzzer"]) == 48
+    assert pipeline.fanouts["fuzzer"][:3] == ["fuzzer_00", "fuzzer_01", "fuzzer_02"]
+    assert pipeline.fanouts["fuzzer"][-1] == "fuzzer_47"
+    assert pipeline.fanouts["batch_merge"] == [
+        "batch_merge_0",
+        "batch_merge_1",
+        "batch_merge_2",
+        "batch_merge_3",
+        "batch_merge_4",
+        "batch_merge_5",
+    ]
+    assert pipeline.node_map["fuzzer_00"].fanout_member["label"] == "libpng/asan/parser/seed_001"
+    assert pipeline.node_map["fuzzer_47"].fanout_member["workspace"] == "agents/sqlite_ubsan_seed_003_47"
+    assert pipeline.node_map["fuzzer_00"].target.cwd.endswith(
+        "custom_catalog_batched/agents/libpng_asan_seed_001_00"
+    )
+    assert pipeline.node_map["batch_merge_0"].fanout_member["member_ids"] == [
+        "fuzzer_00",
+        "fuzzer_01",
+        "fuzzer_02",
+        "fuzzer_03",
+        "fuzzer_04",
+        "fuzzer_05",
+        "fuzzer_06",
+        "fuzzer_07",
+    ]
+    assert pipeline.node_map["merge"].depends_on == pipeline.fanouts["batch_merge"]
+
+
 def test_bundled_codex_fuzz_catalog_grouped_template_is_available():
     assert "codex-fuzz-catalog-grouped" in bundled_template_names()
     assert "\nname: codex-fuzz-catalog-grouped-128\n" in f"\n{load_bundled_template_yaml('codex-fuzz-catalog-grouped')}"
@@ -1106,6 +1201,33 @@ def test_bundled_codex_fuzz_catalog_pipeline_expands_into_128_concrete_nodes():
     assert pipeline.node_map["fuzzer_000"].target.cwd.endswith("codex_fuzz_catalog_128/agents/libpng_asan_seed_001_000")
     assert pipeline.node_map["merge"].depends_on[0] == "fuzzer_000"
     assert pipeline.node_map["merge"].depends_on[-1] == "fuzzer_127"
+
+
+def test_bundled_codex_fuzz_catalog_batched_pipeline_expands_into_scoped_batch_reducers():
+    pipeline = load_pipeline_from_path(str(bundled_template_path("codex-fuzz-catalog-batched")))
+
+    assert pipeline.concurrency == 32
+    assert len(pipeline.fanouts["fuzzer"]) == 128
+    assert pipeline.fanouts["fuzzer"][:3] == ["fuzzer_000", "fuzzer_001", "fuzzer_002"]
+    assert pipeline.fanouts["fuzzer"][-1] == "fuzzer_127"
+    assert pipeline.fanouts["batch_merge"] == [
+        "batch_merge_0",
+        "batch_merge_1",
+        "batch_merge_2",
+        "batch_merge_3",
+        "batch_merge_4",
+        "batch_merge_5",
+        "batch_merge_6",
+        "batch_merge_7",
+    ]
+    assert pipeline.node_map["fuzzer_000"].fanout_member["label"] == "libpng/asan/parser/seed_001"
+    assert pipeline.node_map["fuzzer_000"].fanout_member["workspace"] == "agents/libpng_asan_seed_001_000"
+    assert pipeline.node_map["fuzzer_000"].target.cwd.endswith(
+        "codex_fuzz_catalog_batched_128/agents/libpng_asan_seed_001_000"
+    )
+    assert pipeline.node_map["batch_merge_0"].fanout_member["member_ids"] == pipeline.fanouts["fuzzer"][:16]
+    assert pipeline.node_map["batch_merge_0"].depends_on == pipeline.fanouts["fuzzer"][:16]
+    assert pipeline.node_map["merge"].depends_on == pipeline.fanouts["batch_merge"]
 
 
 def test_bundled_codex_fuzz_catalog_grouped_pipeline_expands_into_scoped_grouped_reducers():

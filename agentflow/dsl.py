@@ -3,8 +3,11 @@ from __future__ import annotations
 from copy import deepcopy
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+import json
 from os import PathLike
 from typing import Any
+
+import yaml
 
 from agentflow.specs import AgentKind, LocalTarget, NodeSpec, PipelineSpec
 
@@ -92,23 +95,47 @@ class DAG:
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "name": self.name,
-            "working_dir": self.working_dir,
-            "concurrency": self.concurrency,
-            "fail_fast": self.fail_fast,
-            "nodes": [node.to_payload() for node in self._nodes.values()],
         }
         if self.description is not None:
             payload["description"] = self.description
+        payload["working_dir"] = self.working_dir
+        payload["concurrency"] = self.concurrency
+        payload["fail_fast"] = self.fail_fast
         if self.node_defaults is not None:
             payload["node_defaults"] = _normalize_node_defaults(self.node_defaults)
         if self.agent_defaults:
             payload["agent_defaults"] = _normalize_agent_defaults(self.agent_defaults)
         if self.local_target_defaults is not None:
             payload["local_target_defaults"] = self.local_target_defaults
+        payload["nodes"] = [node.to_payload() for node in self._nodes.values()]
         return payload
 
     def to_spec(self) -> PipelineSpec:
         return PipelineSpec.model_validate(self.to_payload())
+
+    def to_json(self, *, indent: int | None = 2) -> str:
+        return json.dumps(self.to_payload(), indent=indent)
+
+    def to_yaml(self) -> str:
+        payload = json.loads(self.to_json(indent=None))
+        return yaml.dump(
+            payload,
+            Dumper=_ReadableYamlDumper,
+            sort_keys=False,
+            allow_unicode=False,
+        )
+
+
+class _ReadableYamlDumper(yaml.SafeDumper):
+    pass
+
+
+def _represent_readable_yaml_string(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode:
+    style = "|" if "\n" in value else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", value, style=style)
+
+
+_ReadableYamlDumper.add_representer(str, _represent_readable_yaml_string)
 
 
 def _normalize_local_target(value: Any) -> Any:
