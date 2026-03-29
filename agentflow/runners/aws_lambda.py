@@ -66,12 +66,14 @@ class AwsLambdaRunner(Runner):
         import boto3
 
         client = boto3.client("lambda", region_name=target.region)
-        response = client.invoke(
-            FunctionName=target.function_name,
-            InvocationType=target.invocation_type,
-            Qualifier=target.qualifier,
-            Payload=json.dumps(payload).encode("utf-8"),
-        )
+        invoke_kwargs: dict[str, object] = {
+            "FunctionName": target.function_name,
+            "InvocationType": target.invocation_type,
+            "Payload": json.dumps(payload).encode("utf-8"),
+        }
+        if target.qualifier:
+            invoke_kwargs["Qualifier"] = target.qualifier
+        response = client.invoke(**invoke_kwargs)
         raw = response["Payload"].read().decode("utf-8")
         if response.get("FunctionError"):
             return {
