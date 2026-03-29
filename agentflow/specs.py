@@ -439,6 +439,8 @@ class EC2Target(BaseModel):
     install_agents: list[str] = Field(default_factory=lambda: ["codex", "claude"])
     user_data: str | None = None
     spot: bool = False
+    terminate: bool = True
+    snapshot: bool = False
 
 
 class ECSTarget(BaseModel):

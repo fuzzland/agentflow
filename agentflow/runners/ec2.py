@@ -76,6 +76,22 @@ class EC2Runner(Runner):
         instance = response["Reservations"][0]["Instances"][0]
         return instance.get("PublicIpAddress") or instance.get("PrivateIpAddress")
 
+    def _snapshot_instance(self, region: str, instance_id: str, name: str) -> str:
+        """Create an AMI from the instance. Returns the AMI ID."""
+        import boto3
+
+        ec2 = boto3.client("ec2", region_name=region)
+        resp = ec2.create_image(
+            InstanceId=instance_id,
+            Name=name,
+            NoReboot=False,
+            TagSpecifications=[{
+                "ResourceType": "image",
+                "Tags": [{"Key": "Name", "Value": name}, {"Key": "CreatedBy", "Value": "agentflow"}],
+            }],
+        )
+        return resp["ImageId"]
+
     def _terminate_instance(self, region: str, instance_id: str) -> None:
         import boto3
 
@@ -241,9 +257,20 @@ class EC2Runner(Runner):
             )
         finally:
             if instance_id:
-                await on_output("stderr", f"Terminating {instance_id}...")
                 try:
-                    await asyncio.to_thread(self._terminate_instance, target.region, instance_id)
-                    await on_output("stderr", f"Instance {instance_id} terminated.")
+                    if getattr(target, "snapshot", False):
+                        snap_name = f"agentflow-{node.id}-{instance_id}"
+                        await on_output("stderr", f"Creating snapshot {snap_name}...")
+                        ami_id = await asyncio.to_thread(
+                            self._snapshot_instance, target.region, instance_id, snap_name,
+                        )
+                        await on_output("stderr", f"Snapshot AMI: {ami_id}")
+
+                    if getattr(target, "terminate", True):
+                        await on_output("stderr", f"Terminating {instance_id}...")
+                        await asyncio.to_thread(self._terminate_instance, target.region, instance_id)
+                        await on_output("stderr", f"Instance {instance_id} terminated.")
+                    else:
+                        await on_output("stderr", f"Instance {instance_id} left running (terminate=false).")
                 except Exception as exc:
-                    await on_output("stderr", f"Warning: failed to terminate {instance_id}: {exc}")
+                    await on_output("stderr", f"Warning: cleanup failed for {instance_id}: {exc}")
