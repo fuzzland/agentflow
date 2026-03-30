@@ -1,64 +1,139 @@
 # AgentFlow
 
-AgentFlow is a general agent orchestration package for dependency-aware DAGs. It runs `codex`, `claude`, and `kimi` nodes locally, in containers, or on AWS Lambda.
+Orchestrate codex, claude, and kimi agents in dependency graphs with parallel fanout, iterative cycles, and remote execution on SSH/EC2/ECS.
 
-## Quickstart
-
-Requirements:
-
-- Python 3.11+
-- The agent CLIs your pipeline uses
-
-Install:
+## Install
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
+python3 -m venv .venv && . .venv/bin/activate
 pip install -e .[dev]
 ```
 
-Scaffold and run a pipeline:
+## Quick Start
 
-```bash
-agentflow templates
-agentflow init > pipeline.py
-agentflow run pipeline.py
+```python
+from agentflow import Graph, codex, claude
+
+with Graph("my-pipeline", concurrency=3) as g:
+    plan = codex(task_id="plan", prompt="Inspect the repo and plan the work.", tools="read_only")
+    impl = claude(task_id="impl", prompt="Implement the plan:\n{{ nodes.plan.output }}", tools="read_write")
+    review = codex(task_id="review", prompt="Review:\n{{ nodes.impl.output }}")
+    plan >> impl >> review
+
+print(g.to_json())
 ```
 
-Useful next commands:
-
 ```bash
-agentflow init repo-sweep-batched.py --template codex-repo-sweep-batched
-agentflow inspect pipeline.py
-agentflow serve --host 127.0.0.1 --port 8000
-agentflow smoke
+agentflow run pipeline.py --output summary
 ```
 
-## Bundled Templates
+## Parallel Fanout
 
-- `pipeline`: generic Codex/Claude/Kimi starter DAG
-- `codex-repo-sweep-batched`: large repo sweep with staged batch reducers
-- `local-kimi-smoke`: shortest real-agent local smoke DAG
-- `local-kimi-shell-init-smoke`: explicit `shell_init: kimi` smoke DAG
-- `local-kimi-shell-wrapper-smoke`: explicit `target.shell` wrapper smoke DAG
+Fan a node into many parallel copies with `fanout()`:
 
-## Fanout
+```python
+from agentflow import Graph, codex, fanout, merge
 
-AgentFlow keeps the framework generic. The core fanout surface is:
+with Graph("code-review", concurrency=8) as g:
+    scan = codex(task_id="scan", prompt="List the top 5 files to review.")
+    review = fanout(
+        codex(task_id="review", prompt="Review {{ item.file }}:\n{{ nodes.scan.output }}"),
+        [{"file": "api.py"}, {"file": "auth.py"}, {"file": "db.py"}],
+    )
+    summary = codex(task_id="summary", prompt=(
+        "Merge findings:\n{% for r in fanouts.review.nodes %}{{ r.output }}\n{% endfor %}"
+    ))
+    scan >> review >> summary
 
-- `count`
-- `values`
-- `matrix`
-- `group_by`
-- `batches`
-- optional `derive`, plus matrix-only `include` and `exclude`
+print(g.to_json())
+```
 
-Pipelines can also include a periodic local node with `schedule.every_seconds` and `schedule.until_fanout_settles_from`. That lets one collector run inside the same pipeline, inspect shard artifact logs on disk, and optionally issue cancel/rerun actions against a watched fanout group.
+`fanout(node, source)` dispatches on type:
+- `int` -- N identical copies: `fanout(node, 128)`
+- `list` -- one per item: `fanout(node, [{"repo": "api"}, ...])`
+- `dict` -- cartesian product: `fanout(node, {"axis1": [...], "axis2": [...]})`
 
-Use these primitives via the Python DSL helpers.
+Reduce with `merge(node, source, size=N)` (batch) or `merge(node, source, by=["field"])` (group).
+
+## Iterative Cycles
+
+Loop until a stop condition with `on_failure`:
+
+```python
+from agentflow import Graph, codex, claude
+
+with Graph("iterative-impl", max_iterations=5) as g:
+    write = codex(
+        task_id="write",
+        prompt="Write a Python email validator.\n{% if nodes.review.output %}Fix: {{ nodes.review.output }}{% endif %}",
+        tools="read_write",
+    )
+    review = claude(
+        task_id="review",
+        prompt="Review:\n{{ nodes.write.output }}\nIf complete, say LGTM. Otherwise list issues.",
+        success_criteria=[{"kind": "output_contains", "value": "LGTM"}],
+    )
+    write >> review
+    review.on_failure >> write  # loop until LGTM or max_iterations
+
+print(g.to_json())
+```
+
+## Remote Execution
+
+Run agents on remote machines -- zero config needed:
+
+```python
+# EC2 (auto-discovers AMI, key pair, VPC)
+codex(task_id="remote", prompt="...", target={"kind": "ec2", "region": "us-east-1"})
+
+# ECS Fargate (auto-discovers VPC, builds agent image)
+codex(task_id="remote", prompt="...", target={"kind": "ecs", "region": "us-east-1"})
+
+# SSH
+codex(task_id="remote", prompt="...", target={"kind": "ssh", "host": "server", "username": "deploy"})
+```
+
+Shared instances across nodes:
+
+```python
+plan = codex(task_id="plan", prompt="...", target={"kind": "ec2", "shared": "dev-box"})
+impl = codex(task_id="impl", prompt="...", target={"kind": "ec2", "shared": "dev-box"})
+plan >> impl  # same EC2 instance, files persist
+```
+
+## Scratchboard
+
+Shared memory file across all agents:
+
+```python
+with Graph("campaign", scratchboard=True) as g:
+    shards = fanout(codex(task_id="fuzz", prompt="..."), 128)
+```
 
 ## Examples
 
-- `examples/airflow_like.py` -- basic DAG with static dependencies
-- `examples/airflow_like_fuzz_batched.py` -- 128-shard batched fuzz with periodic monitor
-- `examples/airflow_like_fuzz_grouped.py` -- 128-shard matrix fuzz with grouped reducers
+| Example | What it does |
+|---|---|
+| `airflow_like.py` | Basic pipeline: plan → implement → review → merge |
+| `code_review.py` | Fan out code review across files, merge findings |
+| `dep_audit.py` | Audit each dependency for security/license issues |
+| `test_gap.py` | Find untested modules, suggest tests per module |
+| `multi_agent_debate.py` | Codex vs Claude: independent solve + cross-critique |
+| `release_check.py` | Parallel release gate: tests + security + changelog |
+| `iterative_impl.py` | Write → review → fix cycle until LGTM |
+| `airflow_like_fuzz_batched.py` | 128-shard fanout with batch merge + periodic monitor |
+| `airflow_like_fuzz_grouped.py` | Matrix fanout with grouped reducers |
+| `ec2_remote.py` | Run codex on a remote EC2 instance |
+| `ecs_fargate.py` | Run codex on ECS Fargate |
+
+## CLI
+
+```bash
+agentflow run pipeline.py           # run a pipeline
+agentflow run pipeline.py --output summary
+agentflow inspect pipeline.py       # show expanded graph
+agentflow validate pipeline.py      # check without running
+agentflow templates                  # list starter templates
+agentflow init > pipeline.py        # scaffold a starter
+```
