@@ -22,7 +22,6 @@ def create_worktree(repo_dir: Path, node_id: str, run_id: str) -> Path:
         timeout=30,
     )
     if result.returncode != 0:
-        # Branch might exist from a previous run -- try without -b
         result = subprocess.run(
             ["git", "worktree", "add", str(worktree_dir), "HEAD"],
             cwd=str(repo_dir),
@@ -36,8 +35,27 @@ def create_worktree(repo_dir: Path, node_id: str, run_id: str) -> Path:
     return worktree_dir
 
 
+def get_worktree_diff(worktree_dir: Path) -> str:
+    """Get the full diff of changes made in a worktree (tracked + untracked)."""
+    # Stage everything so diff captures new files too
+    subprocess.run(
+        ["git", "add", "-A"],
+        cwd=str(worktree_dir),
+        capture_output=True,
+        timeout=10,
+    )
+    result = subprocess.run(
+        ["git", "diff", "--cached", "HEAD"],
+        cwd=str(worktree_dir),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return result.stdout if result.returncode == 0 else ""
+
+
 def remove_worktree(repo_dir: Path, worktree_dir: Path) -> None:
-    """Remove a git worktree and its branch."""
+    """Remove a git worktree."""
     subprocess.run(
         ["git", "worktree", "remove", "--force", str(worktree_dir)],
         cwd=str(repo_dir),

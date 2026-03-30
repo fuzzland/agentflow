@@ -34,6 +34,7 @@ def _node_result_context(
         "stdout": "\n".join(result.stdout_lines),
         "stderr": "\n".join(result.stderr_lines),
         "trace": [event.model_dump(mode="json") for event in result.trace_events],
+        "diff": getattr(result, "diff", ""),
     }
     if run_id is not None and artifacts_base_dir is not None:
         context["artifacts"] = _artifact_paths_context(

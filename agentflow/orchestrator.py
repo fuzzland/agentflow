@@ -494,17 +494,21 @@ class Orchestrator:
             current_tick_number=periodic_tick_number,
             current_tick_started_at=periodic_tick_started_at,
         )
-        # Create git worktree if enabled (local nodes only)
+        # Create git worktree if enabled
         worktree_dir = None
-        if pipeline.use_worktree and node.target.kind == "local":
+        if pipeline.use_worktree:
             from agentflow.worktree import create_worktree, is_git_repo
             if is_git_repo(pipeline.working_path):
                 try:
                     worktree_dir = create_worktree(pipeline.working_path, node_id, run_id)
-                    # Override the node target cwd to use the worktree
                     from types import SimpleNamespace
-                    wt_target = SimpleNamespace(**{k: getattr(node.target, k) for k in node.target.model_fields})
-                    wt_target.cwd = str(worktree_dir)
+                    if node.target.kind == "local":
+                        # Local: point cwd to worktree
+                        wt_target = SimpleNamespace(**{k: getattr(node.target, k) for k in node.target.model_fields})
+                        wt_target.cwd = str(worktree_dir)
+                    else:
+                        # Remote (SSH/EC2/ECS): keep original target, worktree is for diff capture only
+                        wt_target = node.target
                     node = SimpleNamespace(
                         id=node.id, agent=node.agent, prompt=node.prompt,
                         target=wt_target, timeout_seconds=node.timeout_seconds,
@@ -699,13 +703,24 @@ class Orchestrator:
                     content = stripped.removeprefix("SCRATCHBOARD:").strip()
                     await scratchboard.append(node_id, content)
 
-        # Clean up worktree
+        # Capture diff and clean up worktree
         if worktree_dir is not None:
-            from agentflow.worktree import remove_worktree
+            from agentflow.worktree import get_worktree_diff, remove_worktree
+            try:
+                diff = get_worktree_diff(worktree_dir)
+                if diff:
+                    # Store diff as artifact
+                    await self.store.write_artifact_text(run_id, node_id, "diff.patch", diff)
+                    # Also store in node result so templates can use {{ nodes.<id>.diff }}
+                    result.diff = diff
+                else:
+                    result.diff = ""
+            except Exception:
+                result.diff = ""
             try:
                 remove_worktree(pipeline.working_path, worktree_dir)
             except Exception:
-                pass  # best effort cleanup
+                pass
 
         await self.store.persist_run(run_id)
         if periodic_tick_number is not None:
