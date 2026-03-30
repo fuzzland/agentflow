@@ -1752,81 +1752,30 @@ async function renderDetail() {
             : "trace-pill-failure";
 
         return `
-          <div class="trace-card" data-trace-key="${escapeHtml(traceKey)}">
-            <div style="display:grid;gap:0.8rem;padding:0.95rem;">
-              <div style="display:flex;align-items:flex-start;gap:0.8rem;">
-                <span class="trace-tool-icon ${fileEdit ? "trace-tool-icon-write" : "trace-tool-icon-exec"}">${fileEdit ? "&#9998;" : "$"}</span>
-                <div style="min-width:0;flex:1;display:grid;gap:0.5rem;">
-                  <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;flex-wrap:wrap;">
-                    <strong>${escapeHtml(title)}</strong>
-                    ${timestamp ? `<span class="small">${escapeHtml(formatDate(timestamp))}</span>` : ""}
-                  </div>
-                  <div style="padding:0.78rem 0.9rem;border-radius:12px;background:rgba(226, 232, 240, 0.14);border:1px solid rgba(148, 163, 184, 0.22);font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;font-size:0.78rem;line-height:1.55;color:#e5e7eb;white-space:pre-wrap;word-break:break-word;">
-                    <span style="color:#94a3b8;">$ </span>${renderHighlightedCommand(command, filename)}
-                  </div>
-                </div>
-              </div>
-              ${exitCode !== null && exitCode !== undefined ? `<div><span class="trace-pill ${exitBadgeClass}">exit ${escapeHtml(String(exitCode))}</span></div>` : ""}
-              ${output
-                ? `
-                  <details class="trace-subsection">
-                    <summary>Output</summary>
-                    <div class="trace-subsection-body">
-                      ${renderPreBlock(output, "trace-command-block")}
-                    </div>
-                  </details>
-                `
-                : ""
-              }
-            </div>
+          <div style="padding:8px 0;" data-trace-key="${escapeHtml(traceKey)}">
+            <pre style="margin:0;padding:8px 12px;background:#f6f8fa;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;overflow-x:auto;"><span style="color:#656d76;">$ </span>${renderHighlightedCommand(command, filename)}</pre>
+            ${exitCode !== null && exitCode !== undefined ? `<span style="font-size:11px;color:${Number(exitCode) === 0 ? '#1a7f37' : '#cf222e'};">exit ${exitCode}</span>` : ""}
+            ${output ? `<details><summary style="font-size:11px;color:#656d76;cursor:pointer;">output</summary><pre style="margin:4px 0 0;padding:8px 12px;background:#f6f8fa;font-size:12px;line-height:1.5;white-space:pre-wrap;max-height:200px;overflow-y:auto;">${escapeHtml(String(output))}</pre></details>` : ""}
           </div>
         `;
       }
 
       if (isCodexAgentMessage(trace)) {
         const text = extractCodexMessageText(getCodexItem(trace)?.content || trace?.content);
+        if (!text) return "";
         return `
-          <div class="trace-card" data-trace-key="${escapeHtml(traceKey)}">
-            <div style="display:grid;gap:0.7rem;padding:0.95rem;">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;flex-wrap:wrap;">
-                <strong>${escapeHtml(title)}</strong>
-                ${timestamp ? `<span class="small">${escapeHtml(formatDate(timestamp))}</span>` : ""}
-              </div>
-              <div style="max-width:min(46rem, 92%);padding:0.85rem 1rem;border-radius:16px 16px 16px 6px;background:rgba(191, 219, 254, 0.26);border:1px solid rgba(96, 165, 250, 0.28);color:#dbeafe;white-space:pre-wrap;line-height:1.55;">
-                ${escapeHtml(text || "(empty message)")}
-              </div>
-            </div>
-          </div>
+          <div style="padding:8px 0;line-height:1.6;white-space:pre-wrap;" data-trace-key="${escapeHtml(traceKey)}">${escapeHtml(text)}</div>
         `;
       }
 
       if (isCodexLifecycleEvent(trace)) {
-        return `
-          <div class="trace-card" data-trace-key="${escapeHtml(traceKey)}">
-            <div style="display:grid;gap:0.65rem;padding:0.95rem;">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;flex-wrap:wrap;">
-                <strong>${escapeHtml(title)}</strong>
-                ${timestamp ? `<span class="small">${escapeHtml(formatDate(timestamp))}</span>` : ""}
-              </div>
-              <div style="display:inline-flex;align-items:center;gap:0.35rem;width:max-content;padding:0.2rem 0.55rem;border-radius:999px;background:rgba(148, 163, 184, 0.12);border:1px solid rgba(148, 163, 184, 0.2);color:#cbd5e1;font-size:0.74rem;">
-                lifecycle event
-              </div>
-              ${renderBlock("Raw event", trace?.raw || trace?.content, { collapsed: true })}
-            </div>
-          </div>
-        `;
+        return "";  // hide lifecycle noise
       }
 
       return `
-        <details class="trace-card" data-trace-key="${escapeHtml(traceKey)}"${isError || openTraceKeys.has(traceKey) ? " open" : ""}>
-          <summary>
-            <span aria-hidden="true" style="width:0.72rem;height:0.72rem;border-radius:999px;background:${dotColor};display:inline-block;flex:0 0 auto;margin-top:0.1rem;"></span>
-            <span class="trace-card-header">
-              <strong>${escapeHtml(title)}</strong>
-              <span class="trace-card-meta">
-                ${timestamp ? `<span class="small">${escapeHtml(formatDate(timestamp))}</span>` : ""}
-              </span>
-            </span>
+        <details style="padding:4px 0;" data-trace-key="${escapeHtml(traceKey)}"${isError || openTraceKeys.has(traceKey) ? " open" : ""}>
+          <summary style="cursor:pointer;font-size:12px;color:${isError ? '#cf222e' : '#656d76'};">
+              ${escapeHtml(title)}
           </summary>
           <div class="trace-card-body">
             ${renderPreBlock(content, "trace-command-block")}
