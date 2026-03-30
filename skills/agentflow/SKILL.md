@@ -26,13 +26,14 @@ Run: `agentflow run pipeline.py`
 ## Imports
 
 ```python
-from agentflow import Graph, codex, claude, kimi  # basic
-from agentflow import fanout, merge               # for parallel shards
+from agentflow import Graph, codex, claude, kimi       # agents
+from agentflow import fanout, merge                    # parallel shards
+from agentflow import shell, python_node, sync         # utility nodes
 ```
 
 ## Nodes
 
-Create nodes with `codex()`, `claude()`, or `kimi()`. Required: `task_id`, `prompt`.
+Create agent nodes with `codex()`, `claude()`, or `kimi()`. Required: `task_id`, `prompt`.
 
 ```python
 codex(
@@ -156,6 +157,8 @@ No `target` needed. Runs on the host machine.
 ### SSH
 ```python
 target={"kind": "ssh", "host": "server", "username": "deploy"}
+# forward_credentials=True to override remote with local codex/claude/kimi auth
+target={"kind": "ssh", "host": "server", "forward_credentials": True}
 ```
 
 ### EC2 (auto-discovers AMI, key pair, VPC)
@@ -192,6 +195,27 @@ with Graph("review", use_worktree=True) as g:
 ```
 
 Each agent gets a full repo copy at `.agentflow/worktrees/<run_id>/<node_id>/`. Cleaned up after execution.
+
+## Utility Nodes
+
+Non-LLM nodes for deterministic operations (no API calls, instant execution):
+
+```python
+# Run a shell script
+build = shell(task_id="build", script="npm run build && echo OK")
+
+# Run Python code
+validate = python_node(task_id="validate", code="import json; print(json.dumps({'ok': True}))")
+
+# Sync local repo to remote (rclone or tar+ssh fallback)
+deploy = sync(task_id="deploy", mode="full", target={
+    "kind": "ssh", "host": "server", "username": "deploy", "remote_workdir": "/app",
+})
+# mode="repo": .git + stash only (lightweight)
+# mode="full": entire directory
+```
+
+Mix with agent nodes freely: `build >> codex(...) >> deploy`
 
 ## Scratchboard
 
