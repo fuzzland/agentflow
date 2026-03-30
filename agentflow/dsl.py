@@ -357,3 +357,23 @@ def claude(*, task_id: str, prompt: str, **kwargs: Any) -> NodeBuilder:
 
 def kimi(*, task_id: str, prompt: str, **kwargs: Any) -> NodeBuilder:
     return _node(AgentKind.KIMI, task_id=task_id, prompt=prompt, **kwargs)
+
+
+def python_node(*, task_id: str, code: str, **kwargs: Any) -> NodeBuilder:
+    """Run Python code directly. The ``code`` is executed as ``python3 -c <code>``."""
+    return _node(AgentKind.PYTHON, task_id=task_id, prompt=code, **kwargs)
+
+
+def shell(*, task_id: str, script: str, **kwargs: Any) -> NodeBuilder:
+    """Run a shell script directly. The ``script`` is executed as ``bash -c <script>``."""
+    return _node(AgentKind.SHELL, task_id=task_id, prompt=script, **kwargs)
+
+
+def sync(*, task_id: str, mode: str = "full", **kwargs: Any) -> NodeBuilder:
+    """Sync local git repo to a remote target.
+
+    *mode* is ``"repo"`` (.git + stash only) or ``"full"`` (entire directory).
+    The node ``target`` must be SSH, EC2, or ECS with a ``remote_workdir``.
+    Uses rclone if available, falls back to tar + scp.
+    """
+    return _node(AgentKind.SYNC, task_id=task_id, prompt=mode, **kwargs)

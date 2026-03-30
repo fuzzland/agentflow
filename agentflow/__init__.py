@@ -8,6 +8,9 @@ from agentflow.dsl import (
     fanout,
     kimi,
     merge,
+    python_node,
+    shell,
+    sync,
 )
 
 
@@ -25,5 +28,8 @@ __all__ = [
     "fanout",
     "kimi",
     "merge",
+    "python_node",
+    "shell",
+    "sync",
     "create_app",
 ]

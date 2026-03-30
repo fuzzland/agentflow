@@ -31,6 +31,9 @@ class AgentKind(StrEnum):
     CODEX = "codex"
     CLAUDE = "claude"
     KIMI = "kimi"
+    PYTHON = "python"
+    SHELL = "shell"
+    SYNC = "sync"
 
 
 class ToolAccess(StrEnum):
