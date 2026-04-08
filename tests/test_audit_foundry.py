@@ -126,3 +126,24 @@ def test_prepare_foundry_workspace_writes_openzeppelin_remappings_when_libs_exis
         "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/"
         in remappings
     )
+
+
+def test_prepare_foundry_workspace_preserves_existing_remappings_file(tmp_path: Path) -> None:
+    snapshot = tmp_path / "snapshot"
+    (snapshot / "src").mkdir(parents=True)
+    (snapshot / "src" / "Vault.sol").write_text("contract Vault {}", encoding="utf-8")
+    existing_remappings = "custom/=vendor/custom/\n"
+    (snapshot / "remappings.txt").write_text(existing_remappings, encoding="utf-8")
+    (snapshot / "lib" / "openzeppelin-contracts").mkdir(parents=True)
+
+    materialized = MaterializedSource(
+        snapshot_dir=snapshot,
+        source_identifier="snapshot:cafefeedbeef",
+        source_mode="local",
+        source_inventory=["src/Vault.sol", "remappings.txt", "lib/openzeppelin-contracts"],
+    )
+
+    prepared = prepare_foundry_workspace(materialized, tmp_path / "run")
+
+    assert prepared.remappings_path == prepared.workspace_dir / "remappings.txt"
+    assert prepared.remappings_path.read_text(encoding="utf-8") == existing_remappings

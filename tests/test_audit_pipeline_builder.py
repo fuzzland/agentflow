@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from agentflow.audit.pipeline_builder import AUDIT_MANIFEST_ENV, AUDIT_TRACKS, build_contract_audit_graph
@@ -164,3 +165,288 @@ def test_public_example_resolves_repo_root_working_dir_for_python_utility_nodes(
     )
 
     assert spec.working_dir == str(repo_root.resolve())
+
+
+def test_publish_artifacts_summary_uses_report_relative_paths() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    with tempfile.TemporaryDirectory() as tmp:
+        manifest_path = Path(tmp) / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "target": {
+                        "source": {
+                            "kind": "github",
+                            "repo_url": "https://github.com/example/contracts",
+                            "commit": "0123456789abcdef0123456789abcdef01234567",
+                        },
+                        "report": {
+                            "project_name": "Example Vault",
+                            "audit_scope": "src/contracts/vault",
+                        },
+                    },
+                    "run": {
+                        "artifacts_dir": ".agentflow/audits/example-vault",
+                        "parallel_shards": 6,
+                    },
+                    "policy": {
+                        "allow_source_confirmed_without_poc": True,
+                        "max_poc_candidates": 5,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        graph = build_contract_audit_graph(str(manifest_path))
+        payload = graph.to_payload()
+        publish_artifacts = next(node for node in payload["nodes"] if node["id"] == "publish_artifacts")
+
+        completed = subprocess.run(
+            [sys.executable, "-c", publish_artifacts["prompt"]],
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=repo_root,
+        )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {
+        "artifacts_root": "run.artifacts_dir",
+        "report_dir": "report",
+        "report": "report/AUDIT_REPORT.md",
+        "findings": "report/findings.json",
+        "summary": "report/audit_summary.json",
+    }
+
+
+def test_public_example_does_not_inline_manifest_path_in_emitted_graph_json(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": ".agentflow/audits/example-vault",
+                    "parallel_shards": 6,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": True,
+                    "max_poc_candidates": 5,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    repo_root = Path(__file__).resolve().parents[1]
+    pipeline_path = repo_root / "examples" / "contract_audit.py"
+
+    completed = subprocess.run(
+        [sys.executable, str(pipeline_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+        env={**os.environ, AUDIT_MANIFEST_ENV: str(manifest_path)},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert str(manifest_path.resolve()) not in completed.stdout
+
+
+def test_build_contract_audit_graph_limits_tracks_with_parallel_shards(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": ".agentflow/audits/example-vault",
+                    "parallel_shards": 2,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": True,
+                    "max_poc_candidates": 5,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = build_contract_audit_graph(str(manifest_path)).to_payload()
+    audit_shard = next(node for node in payload["nodes"] if node["id"] == "audit_shard")
+    finding_reduce = next(node for node in payload["nodes"] if node["id"] == "finding_reduce")
+
+    assert payload["concurrency"] == 2
+    assert audit_shard["fanout"]["values"] == [
+        {"track": "access-control-and-init"},
+        {"track": "accounting-and-rounding"},
+    ]
+    assert finding_reduce["fanout"]["batches"]["size"] == 2
+
+
+def test_build_contract_audit_graph_threads_policy_and_locks_poc_author_cwd(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": ".agentflow/audits/example-vault",
+                    "parallel_shards": 4,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": False,
+                    "max_poc_candidates": 2,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    spec = build_contract_audit_graph(str(manifest_path)).to_spec()
+
+    assert spec.node_map["poc_author"].target.cwd == ".agentflow/audits/example-vault/workspace/foundry_project"
+    assert "allow_source_confirmed_without_poc=False" in spec.node_map["evidence_gate"].prompt
+    assert "max_poc_candidates=2" in spec.node_map["poc_author"].prompt
+
+
+def test_build_contract_audit_graph_accepts_absolute_artifacts_dir_for_poc_workspace(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    artifacts_dir = tmp_path / "cap-vault-reports" / "artifacts"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": str(artifacts_dir),
+                    "parallel_shards": 4,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": True,
+                    "max_poc_candidates": 3,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    spec = build_contract_audit_graph(str(manifest_path)).to_spec()
+
+    assert spec.node_map["poc_author"].target.cwd == str(
+        artifacts_dir / "workspace" / "foundry_project"
+    )
+
+
+def test_python_utility_node_prompts_compile_without_indentation_errors(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    artifacts_dir = tmp_path / "cap-vault-reports" / "artifacts"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "local",
+                        "local_path": str(tmp_path),
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": str(artifacts_dir),
+                    "parallel_shards": 2,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": True,
+                    "max_poc_candidates": 2,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = build_contract_audit_graph(str(manifest_path)).to_payload()
+
+    for node in payload["nodes"]:
+        if node["agent"] != "python":
+            continue
+        compile(node["prompt"], f"{node['id']}.py", "exec")
+
+
+def test_contract_audit_codex_nodes_bypass_local_codex_sandbox(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": str(tmp_path / "artifacts"),
+                    "parallel_shards": 3,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": True,
+                    "max_poc_candidates": 2,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = build_contract_audit_graph(str(manifest_path)).to_payload()
+
+    for node in payload["nodes"]:
+        if node["agent"] != "codex":
+            continue
+        assert node["extra_args"] == ["--dangerously-bypass-approvals-and-sandbox"]

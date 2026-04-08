@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from agentflow.audit.models import ComponentRef, EvidenceRef, FindingRecord, PocRecord, ReportManifest, ReviewRecord
-from agentflow.audit.reporting import public_findings_projection, render_audit_report
+from agentflow.audit.reporting import extract_json_document, public_findings_projection, render_audit_report
 
 
 def _finding(
@@ -13,6 +13,10 @@ def _finding(
     evidence_file: str | None = None,
     poc_status: str = "not_attempted",
     poc_test_path: str | None = None,
+    summary_text: str | None = None,
+    root_cause_text: str | None = None,
+    attack_scenario_text: str | None = None,
+    review_notes: str = "",
 ) -> FindingRecord:
     return FindingRecord(
         id=finding_id,
@@ -22,10 +26,10 @@ def _finding(
         status="final",
         validation_status=validation_status,
         component=ComponentRef(file=component_file, symbol="transfer"),
-        summary=f"{finding_id} summary",
-        root_cause=f"{finding_id} root cause",
-        attack_scenario=f"{finding_id} impact",
-        review=ReviewRecord(disposition="confirmed", notes=""),
+        summary=summary_text or f"{finding_id} summary",
+        root_cause=root_cause_text or f"{finding_id} root cause",
+        attack_scenario=attack_scenario_text or f"{finding_id} impact",
+        review=ReviewRecord(disposition="confirmed", notes=review_notes),
         dedup_fingerprint=f"fp-{finding_id}",
         poc=PocRecord(eligible=True, status=poc_status, test_path=poc_test_path),
         evidence=(
@@ -129,6 +133,7 @@ def test_public_findings_projection_never_leaks_absolute_paths():
     assert all(not item["component"]["file"].startswith("/") for item in projected)
     assert all(not item["evidence"][0]["file"].startswith("/") for item in projected)
     assert all(not str(item["poc"]["test_path"]).startswith("/") for item in projected)
+    assert projected[0]["evidence"][0]["snippet_ref"] == "F-100-snippet"
     assert all(".." not in item["component"]["file"] for item in projected)
     assert all(".." not in item["evidence"][0]["file"] for item in projected)
     assert all(".." not in str(item["poc"]["test_path"]) for item in projected)
@@ -176,3 +181,86 @@ def test_render_audit_report_sanitizes_traversal_style_poc_paths():
 
     assert "PoC / Reproduction: Exploit.t.sol" in report
     assert "..\\..\\private\\Exploit.t.sol" not in report
+
+
+def test_public_findings_projection_sanitizes_absolute_paths_inside_free_text_fields():
+    findings = [
+        _finding(
+            "F-300",
+            severity="high",
+            validation_status="source_confirmed",
+            component_file="contracts/Vault.sol",
+            summary_text="Observed at /tmp/workspace/src/Vault.sol during review.",
+            root_cause_text=r"Mirror on C:\Users\alice\audit\RootCause.sol must not leak.",
+            attack_scenario_text=r"UNC path \\server\share\attack.txt should also be sanitized.",
+            review_notes="See /var/tmp/repro.log for the raw repro notes.",
+        )
+    ]
+
+    projected = public_findings_projection(findings)
+
+    payload = projected[0]
+    assert "/tmp/workspace/src/Vault.sol" not in payload["summary"]
+    assert r"C:\Users\alice\audit\RootCause.sol" not in payload["root_cause"]
+    assert r"\\server\share\attack.txt" not in payload["attack_scenario"]
+    assert "/var/tmp/repro.log" not in payload["review"]["notes"]
+    assert "Vault.sol" in payload["summary"]
+    assert "RootCause.sol" in payload["root_cause"]
+    assert "attack.txt" in payload["attack_scenario"]
+    assert "repro.log" in payload["review"]["notes"]
+
+
+def test_render_audit_report_sanitizes_absolute_paths_inside_free_text_fields():
+    manifest = ReportManifest(
+        project_name="TokenVault",
+        audit_scope="contracts",
+        source_mode="local snapshot",
+        source_identifier="local://snapshot",
+    )
+    finding = _finding(
+        "F-301",
+        severity="high",
+        validation_status="source_confirmed",
+        component_file="contracts/Vault.sol",
+        summary_text="Source path /tmp/workspace/src/Vault.sol should not be rendered verbatim.",
+        root_cause_text=r"Windows path C:\Users\alice\audit\RootCause.sol should not survive.",
+        attack_scenario_text=r"UNC path \\server\share\attack.txt should be reduced.",
+    )
+
+    report = render_audit_report(manifest, [finding])
+
+    assert "/tmp/workspace/src/Vault.sol" not in report
+    assert r"C:\Users\alice\audit\RootCause.sol" not in report
+    assert r"\\server\share\attack.txt" not in report
+    assert "Vault.sol" in report
+    assert "RootCause.sol" in report
+    assert "attack.txt" in report
+
+
+def test_public_findings_projection_sanitizes_absolute_paths_inside_snippet_refs():
+    finding = _finding(
+        "F-302",
+        severity="medium",
+        validation_status="source_confirmed",
+        component_file="contracts/Vault.sol",
+        evidence_file="contracts/Vault.sol",
+    )
+    finding.evidence[0].snippet_ref = "/Users/alice/private/debug.txt:1-2"
+
+    projected = public_findings_projection([finding])
+
+    assert projected[0]["evidence"][0]["snippet_ref"] == "debug.txt:1-2"
+
+
+def test_extract_json_document_accepts_leading_prose_before_json_array():
+    payload = extract_json_document(
+        "Using skills first.\nValidating schema now.\n[\n  {\"id\": \"CF-02\"},\n  {\"id\": \"CF-04\"}\n]\n"
+    )
+
+    assert payload == [{"id": "CF-02"}, {"id": "CF-04"}]
+
+
+def test_extract_json_document_accepts_trailing_text_after_json_object():
+    payload = extract_json_document("{\"status\": \"ok\"}\nFinal note.\n")
+
+    assert payload == {"status": "ok"}

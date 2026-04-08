@@ -17,11 +17,13 @@ Supported source modes:
   "target": {
     "source": {
       "kind": "local",
-      "local_path": "/replace/me/locally"
+      "local_path": "relative/path/to/local-source"
     }
   }
 }
 ```
+
+Relative `local_path` values are resolved from the manifest file directory, so public examples do not need absolute local paths.
 
 - GitHub repo pinned to a commit:
 
@@ -43,6 +45,13 @@ Optional chain context fields:
 - `contract_address_url`
 - `creation_tx_url`
 
+`run.artifacts_dir` accepts either:
+
+- a relative path under the pipeline working directory
+- an absolute path, such as a private reports repository outside the AgentFlow checkout
+
+`run.parallel_shards` caps how many of the built-in audit tracks run in the first-version example. The public manifest enables all 6 tracks.
+
 ## Run
 
 Structural validation with the bundled placeholder manifest:
@@ -60,6 +69,8 @@ Real audit run with a user-supplied manifest:
 ```bash
 AGENTFLOW_CONTRACT_AUDIT_MANIFEST=path/to/real-contract-audit-manifest.json agentflow run examples/contract_audit.py --output summary
 ```
+
+The summary output reports artifact paths relative to `run.artifacts_dir` and labels that base as `artifacts_root`, so it stays share-safe even when the pipeline runs on a local machine or writes into an external private reports directory.
 
 There is no dedicated `agentflow audit-contract` command yet. The public entrypoint is this manifest-driven example.
 
@@ -86,7 +97,7 @@ Artifacts are written under `run.artifacts_dir`. A typical run layout is:
 
 - The report renders only `target.report.audit_scope` for scope-path text.
 - `AUDIT_REPORT.md` never renders absolute local filesystem paths.
-- Real local debug paths and real chain context should stay only in `reference/`.
+- Real local debug paths and real chain context belong only in local, uncommitted assets such as a gitignored `reference/` directory.
 
 ## First-Version Limits
 
