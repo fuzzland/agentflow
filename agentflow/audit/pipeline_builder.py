@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
 from textwrap import dedent
 
 from agentflow import Graph, codex, fanout, merge, python_node
 
 
 AUDIT_MANIFEST_ENV = "AGENTFLOW_CONTRACT_AUDIT_MANIFEST"
+REPO_ROOT = Path(__file__).resolve().parents[2]
 AUDIT_TRACKS = [
     "access-control-and-init",
     "accounting-and-rounding",
@@ -30,7 +32,7 @@ def _python_call(module: str, function_name: str, *args: str) -> str:
 def build_contract_audit_graph(manifest_path: str) -> Graph:
     with Graph(
         "contract-audit-example",
-        working_dir=".",
+        working_dir=str(REPO_ROOT),
         concurrency=len(AUDIT_TRACKS),
     ) as graph:
         intake_target = python_node(

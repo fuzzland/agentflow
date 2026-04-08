@@ -141,3 +141,26 @@ def test_public_example_prints_contract_audit_graph(tmp_path: Path) -> None:
 
     payload = json.loads(completed.stdout)
     assert payload["name"] == "contract-audit-example"
+
+
+def test_public_example_resolves_repo_root_working_dir_for_python_utility_nodes() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    pipeline_path = repo_root / "examples" / "contract_audit.py"
+
+    completed = subprocess.run(
+        [sys.executable, str(pipeline_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+        env={**os.environ, AUDIT_MANIFEST_ENV: str(repo_root / "examples" / "contract_audit_manifest.example.json")},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+    spec = load_pipeline_from_text(
+        completed.stdout,
+        base_dir=pipeline_path.parent,
+    )
+
+    assert spec.working_dir == str(repo_root.resolve())
