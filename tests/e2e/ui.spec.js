@@ -9,6 +9,8 @@ const cancelPipelinePath = path.join(__dirname, "fixtures", "cancel-pipeline.yam
 const skillOwnedPipelinePath = path.join(__dirname, "fixtures", "skill-owned-pipeline.yaml");
 const skillDefaultIgnorePipelinePath = path.join(__dirname, "fixtures", "skill-default-ignore-pipeline.yaml");
 const skillTrustedTargetPipelinePath = path.join(__dirname, "fixtures", "skill-trusted-target-pipeline.yaml");
+const skillPolicyWorkspaceRoot = path.join(__dirname, "fixtures", "skill-policy-workspace");
+const workspaceGitMarkerPath = path.join(skillPolicyWorkspaceRoot, ".git");
 
 function writeOwnedSkillPackage(packageName, workflowId, content) {
   const packageDir = path.join(agentflowOwnedSkillsRoot, packageName);
@@ -23,6 +25,14 @@ function removeOwnedSkillPackage(packageName) {
   if (fs.existsSync(agentflowOwnedSkillsRoot) && fs.readdirSync(agentflowOwnedSkillsRoot).length === 0) {
     fs.rmSync(agentflowOwnedSkillsRoot, { recursive: true, force: true });
   }
+}
+
+function ensureSkillPolicyWorkspaceRepoBoundary() {
+  fs.writeFileSync(workspaceGitMarkerPath, "e2e fixture repo boundary\n", "utf8");
+}
+
+function clearSkillPolicyWorkspaceRepoBoundary() {
+  fs.rmSync(workspaceGitMarkerPath, { force: true });
 }
 
 async function validatePipeline(request, pipelinePath) {
@@ -115,6 +125,7 @@ test("cancels a running DAG through the API", async ({ request }) => {
 test("uses AgentFlow-owned skill roots and ignores target repo skill packages by default", async ({ request }) => {
   writeOwnedSkillPackage("e2e-owned-analysis", "plan", "# E2E Owned Plan");
   writeOwnedSkillPackage("e2e-shared-analysis", "plan", "# E2E Owned Shared Plan");
+  ensureSkillPolicyWorkspaceRepoBoundary();
 
   try {
     const ownedRun = await createRun(request, skillOwnedPipelinePath);
@@ -130,13 +141,19 @@ test("uses AgentFlow-owned skill roots and ignores target repo skill packages by
   } finally {
     removeOwnedSkillPackage("e2e-owned-analysis");
     removeOwnedSkillPackage("e2e-shared-analysis");
+    clearSkillPolicyWorkspaceRepoBoundary();
   }
 });
 
 test("uses target repo skill packages only when explicit trust is enabled", async ({ request }) => {
-  const run = await createRun(request, skillTrustedTargetPipelinePath);
-  const completed = await waitForTerminalRun(request, run.id, "completed");
-  const stdout = await artifactText(request, completed.id, "review", "stdout.log");
+  ensureSkillPolicyWorkspaceRepoBoundary();
+  try {
+    const run = await createRun(request, skillTrustedTargetPipelinePath);
+    const completed = await waitForTerminalRun(request, run.id, "completed");
+    const stdout = await artifactText(request, completed.id, "review", "stdout.log");
 
-  expect(stdout).toContain("# E2E Trusted Target Review");
+    expect(stdout).toContain("# E2E Trusted Target Review");
+  } finally {
+    clearSkillPolicyWorkspaceRepoBoundary();
+  }
 });
