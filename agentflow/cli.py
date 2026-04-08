@@ -81,6 +81,12 @@ class RunOutputFormat(StrEnum):
     SUMMARY = "summary"
 
 
+class ProgressMode(StrEnum):
+    AUTO = "auto"
+    LIVE = "live"
+    OFF = "off"
+
+
 class SmokePreflightMode(StrEnum):
     AUTO = "auto"
     ALWAYS = "always"
@@ -412,6 +418,23 @@ def _resolve_run_output(output: RunOutputFormat, *, err: bool = False) -> RunOut
     return RunOutputFormat.JSON
 
 
+def _stream_supports_live_progress() -> bool:
+    stream = sys.stderr
+    isatty = getattr(stream, "isatty", None)
+    if not callable(isatty):
+        return False
+    try:
+        return bool(isatty())
+    except OSError:
+        return False
+
+
+def _resolve_progress_mode(mode: ProgressMode) -> ProgressMode:
+    if mode != ProgressMode.AUTO:
+        return mode
+    return ProgressMode.LIVE if _stream_supports_live_progress() else ProgressMode.OFF
+
+
 def _echo_run_result(record: object, *, output: RunOutputFormat, run_dir: Path | str | None = None) -> None:
     resolved_output = _resolve_run_output(output)
     if resolved_output == RunOutputFormat.SUMMARY:
@@ -482,12 +505,74 @@ def _echo_runs_result(records: list[object], *, store: object | None, output: Ru
     typer.echo(json.dumps(payload, indent=2))
 
 
-def _get_run_or_exit(store: object, run_id: str, *, runs_dir: str) -> object:
+def _get_run_or_exit(store: object, run_id: str, *, runs_dir: str, refresh: bool = True) -> object:
     try:
+        refresh_run = getattr(store, "refresh_run", None)
+        if refresh and callable(refresh_run):
+            return refresh_run(run_id)
         return store.get_run(run_id)
     except KeyError as exc:
         typer.echo(f"Run `{run_id}` not found in `{runs_dir}`.", err=True)
         raise typer.Exit(code=1) from exc
+    except FileNotFoundError as exc:
+        typer.echo(f"Run `{run_id}` not found in `{runs_dir}`.", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+def _refresh_runs(store: object) -> list[object]:
+    refresh_runs = getattr(store, "refresh_runs", None)
+    if callable(refresh_runs):
+        return list(refresh_runs())
+    return list(store.list_runs())
+
+
+def _emit_progress_banner(run_id: str, *, pipeline_name: str | None, runs_dir: str, run_dir: Path | str | None, err: bool) -> None:
+    typer.echo(f"Run {run_id} queued", err=err)
+    if pipeline_name:
+        typer.echo(f"Pipeline: {pipeline_name}", err=err)
+    typer.echo(f"Runs dir: {runs_dir}", err=err)
+    if run_dir is not None:
+        typer.echo(f"Run dir: {run_dir}", err=err)
+    typer.echo(f"Follow: agentflow show {run_id} --runs-dir {runs_dir} --follow", err=err)
+    typer.echo(f"Web: http://127.0.0.1:8000/?run_id={run_id}", err=err)
+    typer.echo(f"Start web observer: agentflow serve --runs-dir {runs_dir}", err=err)
+
+
+def _follow_lines_for_event(record: object, event: object, renderer: object) -> list[str]:
+    event_type = getattr(event, "type", "")
+    if event_type == "run_completed":
+        status = _status_value(getattr(record, "status", "unknown"))
+        return renderer.render_progress(
+            node_id="run",
+            kind="run_completed",
+            message=f"run completed with status {status}",
+            timestamp=getattr(event, "timestamp", None),
+        )
+
+    node_id = getattr(event, "node_id", None)
+    if not node_id:
+        return []
+    nodes = getattr(record, "nodes", {}) or {}
+    node = nodes.get(node_id)
+    if node is None:
+        return []
+    kind = getattr(node, "last_progress_kind", None)
+    message = getattr(node, "last_progress_message", None)
+    timestamp = getattr(node, "last_progress_at", None) or getattr(node, "last_event_at", None) or getattr(event, "timestamp", None)
+    if not kind or not message:
+        return []
+    return renderer.render_progress(node_id=node_id, kind=kind, message=message, timestamp=timestamp)
+
+
+async def _follow_run_live(store: object, run_id: str, runs_dir: str, *, err: bool = True) -> None:
+    from agentflow.follow import follow_run_events
+    from agentflow.terminal_progress import TerminalProgressRenderer
+
+    renderer = TerminalProgressRenderer()
+    async for event in follow_run_events(store, run_id, refresh_run_state=False):
+        record = _get_run_or_exit(store, run_id, runs_dir=runs_dir, refresh=False)
+        for line in _follow_lines_for_event(record, event, renderer):
+            typer.echo(line, err=err)
 
 
 def _run_pipeline(pipeline: object, runs_dir: str, max_concurrent_runs: int, output: RunOutputFormat) -> None:
@@ -501,6 +586,57 @@ def _run_pipeline(pipeline: object, runs_dir: str, max_concurrent_runs: int, out
         raise typer.Exit(code=0 if _status_value(completed.status) == "completed" else 1)
 
     asyncio.run(_run())
+
+
+def _run_pipeline_with_progress(
+    pipeline: object,
+    runs_dir: str,
+    max_concurrent_runs: int,
+    output: RunOutputFormat,
+    progress: ProgressMode,
+) -> None:
+    store, orchestrator = _build_runtime(runs_dir, max_concurrent_runs)
+
+    async def _run() -> None:
+        run_record = await orchestrator.submit(pipeline)
+        run_dir = store.run_dir(run_record.id) if hasattr(store, "run_dir") else None
+        follow_task = None
+        if _resolve_progress_mode(progress) == ProgressMode.LIVE:
+            _emit_progress_banner(
+                run_record.id,
+                pipeline_name=getattr(pipeline, "name", None),
+                runs_dir=runs_dir,
+                run_dir=run_dir,
+                err=True,
+            )
+            follow_task = asyncio.create_task(_follow_run_live(store, run_record.id, runs_dir, err=True))
+        completed = await orchestrator.wait(run_record.id, timeout=None)
+        if follow_task is not None:
+            await follow_task
+        _echo_run_result(completed, output=output, run_dir=run_dir)
+        raise typer.Exit(code=0 if _status_value(completed.status) == "completed" else 1)
+
+    asyncio.run(_run())
+
+
+def _render_ps_summary(records: list[object], *, store: object | None = None, include_all: bool = False) -> str:
+    lines = ["Runs:"]
+    for record in records:
+        status = _status_value(getattr(record, "status", "unknown"))
+        if not include_all and status in {"completed", "failed", "cancelled"}:
+            continue
+        run_id = getattr(record, "id", "unknown")
+        pipeline_name = getattr(getattr(record, "pipeline", None), "name", None) or "-"
+        active_nodes = list(getattr(record, "active_node_ids", []) or [])
+        stale_nodes = list(getattr(record, "stale_node_ids", []) or [])
+        rendered = f"- {run_id}: {status} - {pipeline_name} (running={len(active_nodes)}, stale={len(stale_nodes)})"
+        run_dir = _run_dir_for_record(store, run_id)
+        if run_dir is not None:
+            rendered += f" - {run_dir}"
+        lines.append(rendered)
+    if len(lines) == 1:
+        return "Runs:\n- none"
+    return "\n".join(lines)
 
 
 def _run_pipeline_path(path: str, runs_dir: str, max_concurrent_runs: int, output: RunOutputFormat) -> None:
@@ -2110,7 +2246,7 @@ def runs(
     limit: int = typer.Option(20, min=0, help="Maximum runs to show. Use `0` to show all persisted runs."),
 ) -> None:
     store = _build_store(runs_dir)
-    all_runs = store.list_runs()
+    all_runs = _refresh_runs(store)
     selected_runs = all_runs if limit == 0 else all_runs[:limit]
     _echo_runs_result(selected_runs, store=store, output=output, total=len(all_runs))
 
@@ -2124,10 +2260,39 @@ def show(
         "--output",
         help="Result output format. Defaults to `summary` on a terminal and `json` otherwise.",
     ),
+    follow: bool = typer.Option(False, "--follow", help="Continue streaming live progress after printing the current snapshot."),
 ) -> None:
     store = _build_store(runs_dir)
     record = _get_run_or_exit(store, run_id, runs_dir=runs_dir)
     _echo_run_result(record, output=output, run_dir=_run_dir_for_record(store, run_id))
+    if follow:
+        asyncio.run(_follow_run_live(store, run_id, runs_dir, err=False))
+
+
+@app.command()
+def ps(
+    runs_dir: str = typer.Option(".agentflow/runs", envvar="AGENTFLOW_RUNS_DIR"),
+    all: bool = typer.Option(False, "--all", help="Include terminal runs."),
+    watch: bool = typer.Option(False, "--watch", help="Refresh the active run summary until interrupted."),
+) -> None:
+    store = _build_store(runs_dir)
+
+    def _render_once() -> str:
+        return _render_ps_summary(_refresh_runs(store), store=store, include_all=all)
+
+    if not watch:
+        typer.echo(_render_once())
+        return
+
+    while True:
+        typer.echo("\x1bc", nl=False)
+        typer.echo(_render_once())
+        try:
+            import time
+
+            time.sleep(2)
+        except KeyboardInterrupt:
+            raise typer.Exit(code=0)
 
 
 @app.command()
@@ -2222,6 +2387,11 @@ def run(
         "--show-preflight",
         help="Print a successful local preflight summary to stderr when preflight runs.",
     ),
+    progress: ProgressMode = typer.Option(
+        ProgressMode.AUTO,
+        "--progress",
+        help="Live progress mode. `auto` enables progress on real terminals, `live` always streams, and `off` disables progress.",
+    ),
 ) -> None:
     pipeline = _load_pipeline_with_optional_smoke_preflight(
         path,
@@ -2230,7 +2400,10 @@ def run(
         output,
         show_preflight=show_preflight,
     )
-    _run_pipeline(pipeline, runs_dir, max_concurrent_runs, output)
+    if _resolve_progress_mode(progress) == ProgressMode.OFF:
+        _run_pipeline(pipeline, runs_dir, max_concurrent_runs, output)
+        return
+    _run_pipeline_with_progress(pipeline, runs_dir, max_concurrent_runs, output, progress)
 
 
 @app.command()

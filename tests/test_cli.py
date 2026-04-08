@@ -3092,6 +3092,77 @@ def test_run_defaults_to_summary_on_tty(monkeypatch):
     assert "- codex_plan [codex, model=gpt-5-codex]: completed (attempt 1, exit 0) - codex ok" in result.stdout
 
 
+def test_run_enables_live_progress_by_default_on_tty(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeOrchestrator:
+        async def submit(self, pipeline: object):
+            return SimpleNamespace(id="run-live-default")
+
+        async def wait(self, run_id: str, timeout: float | None = None):
+            return _completed_run(run_id, pipeline_name="live-default-pipeline")
+
+    async def fake_follow(store, run_id: str, runs_dir: str, **kwargs):
+        captured["follow_run_id"] = run_id
+        captured["follow_runs_dir"] = runs_dir
+        typer.echo("[13:00:00] worker: pytest cli/tests/cli/test_file_cli.py -> 3 passed", err=kwargs.get("err", False))
+
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda runs_dir, max_concurrent_runs: (
+            SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id),
+            FakeOrchestrator(),
+        ),
+    )
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: SimpleNamespace(name="live-default-pipeline"))
+    monkeypatch.setattr(agentflow.cli, "_stream_supports_live_progress", lambda: True)
+    monkeypatch.setattr(agentflow.cli, "_follow_run_live", fake_follow)
+
+    result = runner.invoke(app, ["run", "pipeline.yaml", "--output", "json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"id": "run-live-default", "status": "completed"}
+    assert captured["follow_run_id"] == "run-live-default"
+    assert captured["follow_runs_dir"] == ".agentflow/runs"
+    assert "Run run-live-default queued" in result.stderr
+    assert "Follow: agentflow show run-live-default --runs-dir .agentflow/runs --follow" in result.stderr
+    assert "[13:00:00] worker: pytest cli/tests/cli/test_file_cli.py -> 3 passed" in result.stderr
+
+
+def test_run_progress_off_skips_live_follow(monkeypatch):
+    called = False
+
+    class FakeOrchestrator:
+        async def submit(self, pipeline: object):
+            return SimpleNamespace(id="run-progress-off")
+
+        async def wait(self, run_id: str, timeout: float | None = None):
+            return _completed_run(run_id, pipeline_name="off-pipeline")
+
+    async def fake_follow(store, run_id: str, runs_dir: str, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda runs_dir, max_concurrent_runs: (
+            SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id),
+            FakeOrchestrator(),
+        ),
+    )
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: SimpleNamespace(name="off-pipeline"))
+    monkeypatch.setattr(agentflow.cli, "_stream_supports_live_progress", lambda: True)
+    monkeypatch.setattr(agentflow.cli, "_follow_run_live", fake_follow)
+
+    result = runner.invoke(app, ["run", "pipeline.yaml", "--progress", "off", "--output", "json"])
+
+    assert result.exit_code == 0
+    assert called is False
+    assert result.stderr == ""
+
+
 def test_run_supports_summary_output(monkeypatch):
     class FakeOrchestrator:
         async def submit(self, pipeline: object):
@@ -3324,6 +3395,71 @@ def test_show_outputs_summary_for_persisted_run(monkeypatch):
     assert "Run run-show: completed" in result.stdout
     assert "Pipeline: show-pipeline" in result.stdout
     assert "Run dir: .agentflow/runs/run-show" in result.stdout
+
+
+def test_show_follow_replays_snapshot_then_streams_new_events(monkeypatch):
+    record = _completed_run("run-show-follow", pipeline_name="show-follow-pipeline", status="running")
+    captured: dict[str, object] = {}
+
+    async def fake_follow(store, run_id: str, runs_dir: str, **kwargs):
+        captured["follow_run_id"] = run_id
+        captured["follow_runs_dir"] = runs_dir
+        typer.echo("[13:00:00] worker: checking managed-agents surfaces")
+
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_store",
+        lambda runs_dir: SimpleNamespace(
+            get_run=lambda run_id: record,
+            refresh_run=lambda run_id: record,
+            run_dir=lambda run_id: Path(runs_dir) / run_id,
+        ),
+    )
+    monkeypatch.setattr(agentflow.cli, "_stream_supports_tty_summary", lambda *, err: True)
+    monkeypatch.setattr(agentflow.cli, "_follow_run_live", fake_follow)
+
+    result = runner.invoke(app, ["show", "run-show-follow", "--follow"])
+
+    assert result.exit_code == 0
+    assert "Run run-show-follow: running" in result.stdout
+    assert "[13:00:00] worker: checking managed-agents surfaces" in result.stdout
+    assert captured["follow_run_id"] == "run-show-follow"
+    assert captured["follow_runs_dir"] == ".agentflow/runs"
+
+
+def test_ps_lists_active_runs_and_stale_counts(monkeypatch):
+    active = SimpleNamespace(
+        id="run-active",
+        status=SimpleNamespace(value="running"),
+        pipeline=SimpleNamespace(name="active-pipeline", nodes=[]),
+        started_at="2026-03-08T04:11:03+00:00",
+        finished_at=None,
+        last_progress_at="2026-03-08T04:11:05+00:00",
+        active_node_ids=["worker_0", "worker_1"],
+        stale_node_ids=["worker_1"],
+        nodes={},
+    )
+    completed = _completed_run("run-complete", pipeline_name="done-pipeline", status="completed")
+
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_store",
+        lambda runs_dir: SimpleNamespace(
+            refresh_runs=lambda: [active, completed],
+            list_runs=lambda: [active, completed],
+            run_dir=lambda run_id: Path(runs_dir) / run_id,
+        ),
+    )
+    monkeypatch.setattr(agentflow.cli, "_stream_supports_tty_summary", lambda *, err: True)
+
+    result = runner.invoke(app, ["ps"])
+
+    assert result.exit_code == 0
+    assert "run-active" in result.stdout
+    assert "active-pipeline" in result.stdout
+    assert "running=2" in result.stdout
+    assert "stale=1" in result.stdout
+    assert "run-complete" not in result.stdout
 
 
 def test_show_defaults_to_json_when_stdout_is_not_a_tty(monkeypatch):
