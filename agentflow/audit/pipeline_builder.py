@@ -4,6 +4,7 @@ from pathlib import Path
 from textwrap import dedent
 
 from agentflow import Graph, codex, fanout, merge, python_node
+from agentflow.audit.intake import load_manifest
 
 
 AUDIT_MANIFEST_ENV = "AGENTFLOW_CONTRACT_AUDIT_MANIFEST"
@@ -16,59 +17,83 @@ AUDIT_TRACKS = [
     "upgradeability-migration-storage-layout",
     "integration-trust-boundaries",
 ]
+CODEX_BYPASS_EXTRA_ARGS = ["--dangerously-bypass-approvals-and-sandbox"]
 
 
-def _python_call(module: str, function_name: str, *args: str) -> str:
-    rendered_args = ", ".join(repr(arg) for arg in args)
+def _manifest_runtime_preamble() -> str:
     return dedent(
         f"""
-        from {module} import {function_name}
+        import os
+        from pathlib import Path
 
-        {function_name}({rendered_args})
+        manifest_path = os.environ.get({AUDIT_MANIFEST_ENV!r})
+        if not manifest_path:
+            raise SystemExit(
+                "Set {AUDIT_MANIFEST_ENV} to the manifest JSON path before running this pipeline."
+            )
+        resolved_manifest_path = Path(manifest_path).expanduser()
+        if not resolved_manifest_path.is_absolute():
+            resolved_manifest_path = (Path.cwd() / resolved_manifest_path).resolve()
+        else:
+            resolved_manifest_path = resolved_manifest_path.resolve()
         """
     ).strip()
 
 
+def _manifest_runtime_python_node(body: str) -> str:
+    return f"{_manifest_runtime_preamble()}\n\n{dedent(body).strip()}"
+
+
 def build_contract_audit_graph(manifest_path: str) -> Graph:
+    manifest = load_manifest(manifest_path)
+    selected_tracks = AUDIT_TRACKS[: min(manifest.run.parallel_shards, len(AUDIT_TRACKS))]
+    poc_workspace_dir = Path(manifest.run.artifacts_dir) / "workspace" / "foundry_project"
+
     with Graph(
         "contract-audit-example",
         working_dir=str(REPO_ROOT),
-        concurrency=len(AUDIT_TRACKS),
+        concurrency=len(selected_tracks),
     ) as graph:
         intake_target = python_node(
             task_id="intake_target",
-            code=_python_call("agentflow.audit.intake", "emit_normalized_manifest", manifest_path),
+            code=_manifest_runtime_python_node(
+                """
+                from agentflow.audit.intake import emit_normalized_manifest
+
+                emit_normalized_manifest(resolved_manifest_path)
+                """
+            ),
         )
         materialize_target = python_node(
             task_id="materialize_target",
-            code=dedent(
-                f"""
+            code=_manifest_runtime_python_node(
+                """
                 import json
                 from pathlib import Path
 
                 from agentflow.audit.intake import load_manifest
                 from agentflow.audit.materialize import materialize_source
 
-                manifest = load_manifest({manifest_path!r})
+                manifest = load_manifest(resolved_manifest_path)
                 materialized = materialize_source(manifest, Path(manifest.run.artifacts_dir))
                 print(
                     json.dumps(
-                        {{
+                        {
                             "snapshot_dir": str(materialized.snapshot_dir),
                             "source_identifier": materialized.source_identifier,
                             "source_mode": materialized.source_mode,
                             "source_inventory": materialized.source_inventory,
-                        }},
+                        },
                         indent=2,
                     )
                 )
                 """
-            ).strip(),
+            ),
         )
         prepare_foundry_workspace = python_node(
             task_id="prepare_foundry_workspace",
-            code=dedent(
-                f"""
+            code=_manifest_runtime_python_node(
+                """
                 import json
                 from pathlib import Path
 
@@ -76,24 +101,24 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
                 from agentflow.audit.intake import load_manifest
                 from agentflow.audit.materialize import materialize_source
 
-                manifest = load_manifest({manifest_path!r})
+                manifest = load_manifest(resolved_manifest_path)
                 materialized = materialize_source(manifest, Path(manifest.run.artifacts_dir))
                 prepared = prepare_foundry_workspace(materialized, Path(manifest.run.artifacts_dir))
                 print(
                     json.dumps(
-                        {{
+                        {
                             "workspace_dir": str(prepared.workspace_dir),
                             "source_snapshot_dir": str(prepared.source_snapshot_dir),
                             "foundry_toml_path": str(prepared.foundry_toml_path),
                             "remappings_path": (
                                 str(prepared.remappings_path) if prepared.remappings_path else None
                             ),
-                        }},
+                        },
                         indent=2,
                     )
                 )
                 """
-            ).strip(),
+            ),
         )
         surface_map = codex(
             task_id="surface_map",
@@ -104,6 +129,7 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
                 "Prepared workspace metadata:\n{{ nodes.prepare_foundry_workspace.output }}"
             ),
             tools="read_only",
+            extra_args=CODEX_BYPASS_EXTRA_ARGS,
             skills=[
                 "entry-point-analyzer::default",
                 "static-analysis::default",
@@ -120,6 +146,7 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
                     "attack preconditions, and remediation notes. Do not write a markdown report."
                 ),
                 tools="read_only",
+                extra_args=CODEX_BYPASS_EXTRA_ARGS,
                 skills=[
                     "entry-point-analyzer::default",
                     "static-analysis::default",
@@ -129,7 +156,7 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
                     "insecure-defaults::default",
                 ],
             ),
-            [{"track": track} for track in AUDIT_TRACKS],
+            [{"track": track} for track in selected_tracks],
         )
         finding_reduce = merge(
             codex(
@@ -144,9 +171,10 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
                     "{% endfor %}"
                 ),
                 tools="read_only",
+                extra_args=CODEX_BYPASS_EXTRA_ARGS,
             ),
             audit_shard,
-            size=len(AUDIT_TRACKS),
+            size=len(selected_tracks),
         )
         evidence_review = codex(
             task_id="evidence_review",
@@ -156,6 +184,7 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
                 "{{ nodes.finding_reduce_0.output }}"
             ),
             tools="read_only",
+            extra_args=CODEX_BYPASS_EXTRA_ARGS,
             skills=[
                 "differential-review::default",
                 "spec-to-code-compliance::default",
@@ -165,19 +194,24 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
             task_id="evidence_gate",
             prompt=(
                 "Produce the validated findings set for the first-version pipeline.\n"
-                "Keep only confirmed items, assign validation status, and mark PoC eligibility.\n\n"
+                "Keep only confirmed items, assign validation status, and mark PoC eligibility.\n"
+                f"Policy: allow_source_confirmed_without_poc={manifest.policy.allow_source_confirmed_without_poc}\n\n"
                 "{{ nodes.evidence_review.output }}"
             ),
             tools="read_only",
+            extra_args=CODEX_BYPASS_EXTRA_ARGS,
         )
         poc_author = codex(
             task_id="poc_author",
             prompt=(
                 "Author Foundry PoC tests for the highest-value PoC-eligible validated findings.\n"
+                f"Policy: max_poc_candidates={manifest.policy.max_poc_candidates}\n"
                 "Keep changes limited to test assets and the minimum harness support needed.\n\n"
                 "{{ nodes.evidence_gate.output }}"
             ),
             tools="read_write",
+            extra_args=CODEX_BYPASS_EXTRA_ARGS,
+            target={"kind": "local", "cwd": str(poc_workspace_dir)},
             skills=[
                 "foundry-solidity::default",
                 "property-based-testing::default",
@@ -227,23 +261,24 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
                 "PoC verification:\n{{ nodes.poc_verify.output }}"
             ),
             tools="read_only",
+            extra_args=CODEX_BYPASS_EXTRA_ARGS,
         )
         report_build = python_node(
             task_id="report_build",
-            code=dedent(
-                f"""
+            code=_manifest_runtime_python_node(
+                """
                 import json
                 from pathlib import Path
 
                 from agentflow.audit.intake import build_report_manifest, load_manifest
                 from agentflow.audit.models import FindingRecord
-                from agentflow.audit.reporting import write_report_bundle
+                from agentflow.audit.reporting import extract_json_document, write_report_bundle
 
-                manifest = load_manifest({manifest_path!r})
-                materialized = json.loads(\"\"\"{{{{ nodes.materialize_target.output }}}}\"\"\")
+                manifest = load_manifest(resolved_manifest_path)
+                materialized = json.loads(\"\"\"{{ nodes.materialize_target.output }}\"\"\")
                 findings = [
                     FindingRecord.model_validate(item)
-                    for item in json.loads(\"\"\"{{{{ nodes.final_adjudication.output }}}}\"\"\")
+                    for item in extract_json_document(\"\"\"{{ nodes.final_adjudication.output }}\"\"\")
                 ]
                 report_manifest = build_report_manifest(
                     manifest,
@@ -253,27 +288,25 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
                 write_report_bundle(report_dir, report_manifest, findings)
                 print((report_dir / "AUDIT_REPORT.md").read_text(encoding="utf-8"))
                 """
-            ).strip(),
+            ),
         )
         publish_artifacts = python_node(
             task_id="publish_artifacts",
             code=dedent(
-                f"""
+                """
                 import json
                 from pathlib import Path
 
-                from agentflow.audit.intake import load_manifest
-
-                manifest = load_manifest({manifest_path!r})
-                report_dir = Path(manifest.run.artifacts_dir) / "report"
+                report_dir = Path("report")
                 print(
                     json.dumps(
-                        {{
-                            "report_dir": str(report_dir.resolve()),
-                            "report": str((report_dir / "AUDIT_REPORT.md").resolve()),
-                            "findings": str((report_dir / "findings.json").resolve()),
-                            "summary": str((report_dir / "audit_summary.json").resolve()),
-                        }},
+                        {
+                            "artifacts_root": "run.artifacts_dir",
+                            "report_dir": report_dir.as_posix(),
+                            "report": (report_dir / "AUDIT_REPORT.md").as_posix(),
+                            "findings": (report_dir / "findings.json").as_posix(),
+                            "summary": (report_dir / "audit_summary.json").as_posix(),
+                        },
                         indent=2,
                     )
                 )

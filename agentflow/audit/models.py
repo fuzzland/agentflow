@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -49,8 +50,14 @@ class TargetReportConfig(BaseModel):
         normalized = value.strip()
         if not normalized:
             raise ValueError("audit_scope must be a non-empty report-safe relative path")
-        parts = Path(normalized).parts
-        if Path(normalized).is_absolute() or any(part == ".." for part in parts):
+        posix_path = Path(normalized)
+        windows_path = PureWindowsPath(normalized)
+        if (
+            posix_path.is_absolute()
+            or windows_path.is_absolute()
+            or any(part == ".." for part in posix_path.parts)
+            or any(part == ".." for part in windows_path.parts)
+        ):
             raise ValueError("audit_scope must be a non-empty report-safe relative path")
         return normalized
 
@@ -62,12 +69,39 @@ class ChainContext(BaseModel):
     contract_address_url: str | None = None
     creation_tx_url: str | None = None
 
+    @field_validator("contract_address_url", "creation_tx_url")
+    @classmethod
+    def _validate_optional_urls(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("chain context URLs must use http or https")
+        return normalized
+
 
 class RunConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     artifacts_dir: str
     parallel_shards: int = Field(default=6, ge=1, le=32)
+
+    @field_validator("artifacts_dir")
+    @classmethod
+    def _validate_artifacts_dir(cls, value: str) -> str:
+        normalized = value.strip()
+        posix_path = Path(normalized).expanduser()
+        windows_path = PureWindowsPath(normalized)
+        if not normalized:
+            raise ValueError("artifacts_dir must be a non-empty path")
+        if posix_path.is_absolute():
+            return str(posix_path.resolve())
+        if windows_path.is_absolute():
+            return normalized
+        if any(part == ".." for part in posix_path.parts) or any(part == ".." for part in windows_path.parts):
+            raise ValueError("artifacts_dir must be a non-empty path")
+        return normalized
 
 
 class PolicyConfig(BaseModel):

@@ -42,9 +42,9 @@ def _write_synthesized_foundry_toml(root: Path) -> Path:
 def _write_remappings(root: Path) -> Path | None:
     lib_dir = root / "lib"
     remappings_path = root / "remappings.txt"
+    if remappings_path.exists():
+        return remappings_path
     if not lib_dir.is_dir():
-        if remappings_path.exists():
-            remappings_path.unlink()
         return None
 
     lines: list[str] = []
@@ -61,8 +61,6 @@ def _write_remappings(root: Path) -> Path | None:
     if lines:
         remappings_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return remappings_path
-    if remappings_path.exists():
-        remappings_path.unlink()
     return None
 
 

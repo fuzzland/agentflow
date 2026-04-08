@@ -84,6 +84,17 @@ def test_materialize_local_source_rejects_external_symlink(tmp_path: Path) -> No
         materialize_source(manifest, tmp_path / "run")
 
 
+def test_materialize_local_source_rejects_artifacts_root_inside_source_tree(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    (source_root / "src").mkdir(parents=True)
+    (source_root / "src" / "Vault.sol").write_text("contract Vault {}", encoding="utf-8")
+
+    manifest = _build_local_manifest(source_root)
+
+    with pytest.raises(ValueError, match="inside the local source tree"):
+        materialize_source(manifest, source_root / ".agentflow" / "audits" / "example-vault")
+
+
 def test_snapshot_digest_does_not_depend_on_external_symlink_target_contents(tmp_path: Path) -> None:
     root = tmp_path / "root"
     (root / "src").mkdir(parents=True)

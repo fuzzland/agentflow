@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import urlparse
 
 from agentflow.audit.models import ContractAuditManifest, ReportManifest
 
@@ -19,6 +20,16 @@ def load_manifest(path: str | Path) -> ContractAuditManifest:
         manifest.target.source.local_path = source_path
         if not source_path.exists():
             raise ValueError(f"local_path does not exist: {source_path}")
+        if not source_path.is_dir():
+            raise ValueError(f"local_path must point to a directory: {source_path}")
+    else:
+        repo_url = manifest.target.source.repo_url
+        parsed = urlparse(repo_url)
+        if parsed.scheme != "https" or parsed.netloc.lower() not in {"github.com", "www.github.com"}:
+            raise ValueError("repo_url must use https://github.com/... for github sources")
+        path_parts = [part for part in parsed.path.split("/") if part]
+        if len(path_parts) < 2:
+            raise ValueError("repo_url must use https://github.com/<owner>/<repo> for github sources")
     return manifest
 
 

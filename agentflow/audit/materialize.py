@@ -54,6 +54,15 @@ def _copy_tree(source: Path, destination: Path) -> None:
     shutil.copytree(source, destination, symlinks=True, ignore=shutil.ignore_patterns(".git"))
 
 
+def _ensure_destination_outside_source_tree(source: Path, destination: Path) -> None:
+    resolved_source = source.resolve()
+    resolved_destination = destination.resolve()
+    if resolved_destination == resolved_source or resolved_destination.is_relative_to(resolved_source):
+        raise ValueError(
+            f"artifacts root cannot be inside the local source tree: {resolved_destination}"
+        )
+
+
 def _validate_symlinks_within_tree(root: Path) -> None:
     root = root.resolve()
     for path in root.rglob("*"):
@@ -88,6 +97,7 @@ def materialize_source(manifest: ContractAuditManifest, run_root: Path) -> Mater
 
     source = manifest.target.source
     if source.kind == "local":
+        _ensure_destination_outside_source_tree(source.local_path, snapshot_dir)
         _copy_tree(source.local_path, snapshot_dir)
         _validate_symlinks_within_tree(snapshot_dir)
         source_inventory = _inventory_files(snapshot_dir)
