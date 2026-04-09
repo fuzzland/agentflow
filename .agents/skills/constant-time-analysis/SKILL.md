@@ -1,3 +1,8 @@
+---
+name: constant-time-analysis
+description: Use when reviewing cryptographic or verification logic for secret-dependent timing, gas-observable behavior, or side-channel leakage risks in EVM-related systems.
+---
+
 # Constant Time Analysis
 
 Assess timing and gas-observable behavior where secret-dependent branching could leak sensitive information.

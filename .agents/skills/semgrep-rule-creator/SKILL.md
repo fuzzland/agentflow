@@ -1,3 +1,8 @@
+---
+name: semgrep-rule-creator
+description: Use when authoring Semgrep rules for Solidity vulnerability classes and you need concise, testable patterns with examples.
+---
+
 # Semgrep Rule Creator
 
 Author semgrep patterns for Solidity vulnerability classes seen during analysis.

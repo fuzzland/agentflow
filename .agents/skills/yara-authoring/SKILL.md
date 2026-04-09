@@ -1,3 +1,8 @@
+---
+name: yara-authoring
+description: Use when YARA rules may help investigate contract-audit artifacts, build outputs, or malware-adjacent payloads alongside Solidity evidence.
+---
+
 # YARA Authoring
 
 Use YARA authoring as compatibility support for mixed artifact investigations.

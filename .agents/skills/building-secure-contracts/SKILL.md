@@ -1,3 +1,8 @@
+---
+name: building-secure-contracts
+description: Use when auditing or implementing Solidity contracts and you need guidance on secure EVM patterns, invariant-driven design, or trust-minimizing value flows.
+---
+
 # Building Secure Contracts
 
 Constrain guidance to Solidity patterns that reduce EVM risk.
