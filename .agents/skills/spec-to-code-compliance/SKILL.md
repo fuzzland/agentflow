@@ -1,3 +1,8 @@
+---
+name: spec-to-code-compliance
+description: Use when comparing Solidity implementations against protocol specs, threat models, or written requirements to find mismatches in authorization, economics, or revert behavior.
+---
+
 # Spec to Code Compliance
 
 Compare Solidity behavior against written protocol requirements and threat assumptions.

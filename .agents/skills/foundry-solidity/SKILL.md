@@ -1,3 +1,8 @@
+---
+name: foundry-solidity
+description: Use when working on Solidity codebases that use Foundry for builds, tests, gas reports, or minimal reproductions.
+---
+
 # Foundry Solidity
 
 Use Foundry as the primary Solidity workflow.
