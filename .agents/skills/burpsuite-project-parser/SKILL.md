@@ -1,3 +1,8 @@
+---
+name: burpsuite-project-parser
+description: Use when BurpSuite project data may reveal web-layer assumptions that affect Solidity systems, authentication, request signing, or onchain trust boundaries.
+---
+
 # BurpSuite Project Parser
 
 Use BurpSuite parsing as a compatibility bridge for web-layer context around Solidity systems.
