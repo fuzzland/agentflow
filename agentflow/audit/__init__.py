@@ -1,3 +1,4 @@
+from agentflow.audit.discovery import DiscoveryDecision, DiscoveryState, apply_discovery_round
 from agentflow.audit.intake import build_report_manifest, emit_normalized_manifest, load_manifest
 from agentflow.audit.models import (
     ChainContext,
@@ -22,6 +23,8 @@ __all__ = [
     "ChainContext",
     "ComponentRef",
     "ContractAuditManifest",
+    "DiscoveryDecision",
+    "DiscoveryState",
     "EvidenceRef",
     "FindingRecord",
     "GitHubSourceConfig",
@@ -35,6 +38,7 @@ __all__ = [
     "TargetReportConfig",
     "VerificationCommandResult",
     "VerificationRecord",
+    "apply_discovery_round",
     "build_report_manifest",
     "emit_normalized_manifest",
     "load_manifest",

@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 from agentflow.audit.pipeline_builder import AUDIT_MANIFEST_ENV, AUDIT_TRACKS, build_contract_audit_graph
+from agentflow.audit.reporting import normalize_shard_findings
 from agentflow.loader import load_pipeline_from_text
 
 
@@ -30,24 +31,33 @@ def test_build_contract_audit_graph_contains_expected_nodes(tmp_path: Path) -> N
     node_ids = [node["id"] for node in payload["nodes"]]
 
     assert payload["name"] == "contract-audit-example"
+    assert payload["max_iterations"] == 100
     assert node_ids == [
         "intake_target",
         "materialize_target",
         "prepare_foundry_workspace",
+        "load_discovery_state",
         "surface_map",
         "audit_shard",
+        "finding_prepare",
         "finding_reduce",
         "evidence_review",
         "evidence_gate",
+        "novelty_gate",
+        "discovery_finalize",
         "poc_author",
         "poc_verify",
         "final_adjudication",
         "report_build",
+        "report_review",
+        "report_finalize_build",
         "publish_artifacts",
     ]
 
     audit_shard = next(node for node in payload["nodes"] if node["id"] == "audit_shard")
+    surface_map = next(node for node in payload["nodes"] if node["id"] == "surface_map")
     assert audit_shard["fanout"]["values"] == [{"track": track} for track in AUDIT_TRACKS]
+    assert surface_map["agent"] == "python"
     assert "entry-point-analyzer::default" in audit_shard["skills"]
     assert "static-analysis::default" in audit_shard["skills"]
 
@@ -89,9 +99,85 @@ def test_validated_pipeline_uses_expanded_merge_node_reference_and_shared_filesy
     spec = load_pipeline_from_text(graph.to_json(), base_dir=tmp_path)
 
     assert spec.use_worktree is False
-    assert "finding_reduce_0" in spec.node_map
-    assert "{{ nodes.finding_reduce_0.output }}" in spec.node_map["evidence_review"].prompt
-    assert "{{ nodes.finding_reduce.output }}" not in spec.node_map["evidence_review"].prompt
+    assert "finding_prepare_0" in spec.node_map
+    assert "{{ nodes.finding_prepare_0.output }}" in spec.node_map["finding_reduce"].prompt
+    assert "{{ nodes.finding_reduce.output }}" in spec.node_map["evidence_review"].prompt
+    assert "{{ nodes.finding_reduce_0.output }}" not in spec.node_map["evidence_review"].prompt
+
+
+def test_finding_prepare_embeds_shard_json_as_raw_python_string(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": ".agentflow/audits/example-vault",
+                    "parallel_shards": 6,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": True,
+                    "max_poc_candidates": 5,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    graph = build_contract_audit_graph(str(manifest_path))
+    payload = graph.to_payload()
+    finding_prepare = next(node for node in payload["nodes"] if node["id"] == "finding_prepare")
+
+    assert 'json.loads(r"""{{ item.scope.with_output.nodes | tojson }}""")' in finding_prepare["prompt"]
+
+
+def test_evidence_gate_requires_structured_findings_json_output(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": ".agentflow/audits/example-vault",
+                    "parallel_shards": 6,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": True,
+                    "max_poc_candidates": 5,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    graph = build_contract_audit_graph(str(manifest_path))
+    payload = graph.to_payload()
+    evidence_gate = next(node for node in payload["nodes"] if node["id"] == "evidence_gate")
+
+    assert "Return only a JSON array of findings." in evidence_gate["prompt"]
+    assert '"validation_status": "poc_confirmed|source_confirmed|rejected"' in evidence_gate["prompt"]
+    assert "Do not use alternative keys like finding_id, review_notes, poc_eligibility, or verdict." in evidence_gate["prompt"]
+    assert "every finding that survives to the final report must have a Foundry PoC" in evidence_gate["prompt"]
 
 
 def test_public_example_prints_contract_audit_graph(tmp_path: Path) -> None:
@@ -295,6 +381,7 @@ def test_build_contract_audit_graph_limits_tracks_with_parallel_shards(tmp_path:
 
     payload = build_contract_audit_graph(str(manifest_path)).to_payload()
     audit_shard = next(node for node in payload["nodes"] if node["id"] == "audit_shard")
+    finding_prepare = next(node for node in payload["nodes"] if node["id"] == "finding_prepare")
     finding_reduce = next(node for node in payload["nodes"] if node["id"] == "finding_reduce")
 
     assert payload["concurrency"] == 2
@@ -302,10 +389,60 @@ def test_build_contract_audit_graph_limits_tracks_with_parallel_shards(tmp_path:
         {"track": "access-control-and-init"},
         {"track": "accounting-and-rounding"},
     ]
-    assert finding_reduce["fanout"]["batches"]["size"] == 2
+    assert finding_prepare["fanout"]["batches"]["size"] == 2
+    assert "fanout" not in finding_reduce
 
 
 def test_build_contract_audit_graph_threads_policy_and_locks_poc_author_cwd(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                    "deployment_context": "The deployed vault intentionally keeps slasher at zero.",
+                },
+                "run": {
+                    "artifacts_dir": ".agentflow/audits/example-vault",
+                    "parallel_shards": 4,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": False,
+                    "max_poc_candidates": 2,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    spec = build_contract_audit_graph(str(manifest_path)).to_spec()
+
+    assert spec.node_map["poc_author"].target.cwd == ".agentflow/audits/example-vault/workspace/foundry_project"
+    assert "allow_source_confirmed_without_poc=False" in spec.node_map["evidence_gate"].prompt
+    assert "max_poc_candidates=2" in spec.node_map["poc_author"].prompt
+    assert "every non-rejected validated finding" in spec.node_map["poc_author"].prompt
+    assert "Do not return any `source_confirmed` findings." in spec.node_map["final_adjudication"].prompt
+    assert "only findings with a corresponding Foundry PoC test may survive" in spec.node_map["final_adjudication"].prompt
+    assert "Only keep findings that remain PoC-confirmed" in spec.node_map["report_review"].prompt
+    assert "absolutely impossible in the real business scenario" in spec.node_map["report_review"].prompt
+    assert "intentionally keeps slasher at zero" in spec.node_map["evidence_review"].prompt
+    assert spec.node_map["novelty_gate"].on_failure_restart == ["load_discovery_state"]
+    assert 'findings_from_text("""{{ nodes.evidence_gate.output }}""")' in spec.node_map["novelty_gate"].prompt
+    assert "{{ nodes.discovery_finalize.output }}" in spec.node_map["poc_author"].prompt
+    assert "{{ nodes.poc_author.output }}" in spec.node_map["final_adjudication"].prompt
+    assert "{{ nodes.report_build.output }}" in spec.node_map["report_review"].prompt
+    assert "{{ nodes.report_review.output }}" in spec.node_map["report_finalize_build"].prompt
+
+
+def test_poc_verify_tracks_authored_test_coverage(tmp_path: Path) -> None:
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(
         json.dumps(
@@ -336,9 +473,10 @@ def test_build_contract_audit_graph_threads_policy_and_locks_poc_author_cwd(tmp_
 
     spec = build_contract_audit_graph(str(manifest_path)).to_spec()
 
-    assert spec.node_map["poc_author"].target.cwd == ".agentflow/audits/example-vault/workspace/foundry_project"
-    assert "allow_source_confirmed_without_poc=False" in spec.node_map["evidence_gate"].prompt
-    assert "max_poc_candidates=2" in spec.node_map["poc_author"].prompt
+    assert "{{ nodes.poc_author.output }}" in spec.node_map["poc_verify"].prompt
+    assert "{{ nodes.discovery_finalize.output }}" in spec.node_map["poc_verify"].prompt
+    assert "missing_mappings" in spec.node_map["poc_verify"].prompt
+    assert "nonexistent_test_paths" in spec.node_map["poc_verify"].prompt
 
 
 def test_build_contract_audit_graph_accepts_absolute_artifacts_dir_for_poc_workspace(tmp_path: Path) -> None:
@@ -450,3 +588,129 @@ def test_contract_audit_codex_nodes_bypass_local_codex_sandbox(tmp_path: Path) -
         if node["agent"] != "codex":
             continue
         assert node["extra_args"] == ["--dangerously-bypass-approvals-and-sandbox"]
+
+
+def test_contract_audit_codex_nodes_retry_transient_provider_failures(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": str(tmp_path / "artifacts"),
+                    "parallel_shards": 3,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": True,
+                    "max_poc_candidates": 2,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = build_contract_audit_graph(str(manifest_path)).to_payload()
+
+    for node in payload["nodes"]:
+        if node["agent"] != "codex":
+            continue
+        assert node["retries"] == 5
+        assert node["retry_backoff_seconds"] == 5.0
+
+
+def test_normalize_shard_findings_extracts_structured_candidate_lists() -> None:
+    normalized = normalize_shard_findings(
+        [
+            {
+                "track": "access-control-and-init",
+                "output": (
+                    "progress message\n"
+                    "another line\n"
+                    '[{"id":"A-1","title":"Issue A"},{"id":"A-2","title":"Issue B"}]'
+                ),
+            },
+            {
+                "track": "state-machine-and-epoch-flow",
+                "output": "status update\n[{\"id\":\"S-1\",\"title\":\"Issue C\"}]",
+            },
+        ]
+    )
+
+    assert normalized == [
+        {
+            "track": "access-control-and-init",
+            "findings": [
+                {"id": "A-1", "title": "Issue A"},
+                {"id": "A-2", "title": "Issue B"},
+            ],
+        },
+        {
+            "track": "state-machine-and-epoch-flow",
+            "findings": [
+                {"id": "S-1", "title": "Issue C"},
+            ],
+        },
+    ]
+
+
+def test_normalize_shard_findings_falls_back_to_stdout_agent_message_json() -> None:
+    normalized = normalize_shard_findings(
+        [
+            {
+                "track": "access-control-and-init",
+                "output": "progress only",
+                "stdout": "\n".join(
+                    [
+                        '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"thinking..."}}',
+                        '{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"[{\\"id\\":\\"A-1\\",\\"title\\":\\"Issue A\\"}]"}}',
+                    ]
+                ),
+            }
+        ]
+    )
+
+    assert normalized == [
+        {
+            "track": "access-control-and-init",
+            "findings": [
+                {"id": "A-1", "title": "Issue A"},
+            ],
+        }
+    ]
+
+
+def test_normalize_shard_findings_falls_back_to_trace_events_json() -> None:
+    normalized = normalize_shard_findings(
+        [
+            {
+                "track": "accounting-and-rounding",
+                "output": "progress only",
+                "trace_events": [
+                    {"kind": "assistant_message", "content": "thinking..."},
+                    {
+                        "kind": "assistant_message",
+                        "content": '[{"id":"A-2","title":"Issue B"}]',
+                    },
+                ],
+            }
+        ]
+    )
+
+    assert normalized == [
+        {
+            "track": "accounting-and-rounding",
+            "findings": [
+                {"id": "A-2", "title": "Issue B"},
+            ],
+        }
+    ]

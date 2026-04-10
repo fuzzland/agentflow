@@ -42,6 +42,34 @@ def test_load_manifest_accepts_local_source_and_uses_report_safe_scope(tmp_path:
     assert str(source_dir) not in report_manifest.model_dump_json()
 
 
+def test_load_manifest_accepts_optional_deployment_context_without_leaking_it_to_report_manifest(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    manifest_path = tmp_path / "local-with-deployment-context.json"
+    _write_manifest(
+        manifest_path,
+        {
+            "target": {
+                "source": {"kind": "local", "local_path": str(source_dir)},
+                "report": {"project_name": "Example Vault", "audit_scope": "src/contracts/vault"},
+                "deployment_context": (
+                    "The deployed instance is initialized by the project factory and the slasher is intentionally "
+                    "left at zero for this product line."
+                ),
+            },
+            "run": {"artifacts_dir": ".agentflow/audits/example-vault", "parallel_shards": 6},
+            "policy": {"allow_source_confirmed_without_poc": True, "max_poc_candidates": 5},
+        },
+    )
+
+    manifest = load_manifest(manifest_path)
+    report_manifest = build_report_manifest(manifest, source_identifier="snapshot:deadbeef")
+
+    assert manifest.target.deployment_context is not None
+    assert "initialized by the project factory" in manifest.target.deployment_context
+    assert "deployment_context" not in report_manifest.model_dump(mode="json")
+
+
 def test_load_manifest_requires_commit_for_github_sources(tmp_path: Path) -> None:
     manifest_path = tmp_path / "github.json"
     _write_manifest(
