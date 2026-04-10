@@ -11,7 +11,8 @@ from contextlib import suppress
 from agentflow.local_shell import render_shell_init, shell_wrapper_requires_command_placeholder, target_uses_interactive_bash
 from agentflow.prepared import ExecutionPaths, PreparedExecution
 from agentflow.runners.base import LaunchPlan, RawExecutionResult, Runner, StreamCallback
-from agentflow.specs import LocalTarget, NodeSpec
+from agentflow.specs import AgentKind, LocalTarget, NodeSpec
+from agentflow.traces import create_trace_parser
 from agentflow.utils import ensure_dir
 
 
@@ -35,6 +36,8 @@ class LocalRunner(Runner):
     )
     _STREAM_READ_SIZE = 65536
     _TERMINATE_GRACE_SECONDS = 1.0
+    _STRUCTURED_OUTPUT_IDLE_SECONDS = 15.0
+    _TERMINAL_TRACE_KINDS = frozenset({"completed", "result"})
     _SHELL_COMMAND_PLACEHOLDER_MESSAGE = (
         "`target.shell` already includes a shell command payload. Add `{command}` where AgentFlow should inject "
         "the prepared agent command."
@@ -296,6 +299,15 @@ class LocalRunner(Runner):
             return None
         return task.exception()
 
+    def _trace_parser_for_kind(self, trace_kind: str | None, node_id: str):
+        if trace_kind is None:
+            return None
+        try:
+            agent = AgentKind(trace_kind)
+        except ValueError:
+            return None
+        return create_trace_parser(agent, node_id)
+
     async def _await_tasks(self, tasks: tuple[asyncio.Task[object], ...], timeout: float) -> set[asyncio.Task[object]]:
         pending = {task for task in tasks if not task.done()}
         if not pending:
@@ -338,8 +350,28 @@ class LocalRunner(Runner):
 
         stdout_lines: list[str] = []
         stderr_lines: list[str] = []
-        stdout_task = asyncio.create_task(self._consume_stream(node, process.stdout, "stdout", stdout_lines, on_output))
-        stderr_task = asyncio.create_task(self._consume_stream(node, process.stderr, "stderr", stderr_lines, on_output))
+        completion_parser = self._trace_parser_for_kind(prepared.trace_kind, node.id)
+        terminal_trace_seen = False
+        structured_output_seen = False
+        last_stream_activity_at: float | None = None
+
+        async def on_output_with_terminal_tracking(stream_name: str, line: str) -> None:
+            nonlocal terminal_trace_seen, structured_output_seen, last_stream_activity_at
+            last_stream_activity_at = asyncio.get_running_loop().time()
+            if stream_name == "stdout" and completion_parser is not None:
+                parsed_events = completion_parser.feed(line)
+                if any(event.kind in self._TERMINAL_TRACE_KINDS for event in parsed_events):
+                    terminal_trace_seen = True
+                if any(event.kind == "structured_output" for event in parsed_events):
+                    structured_output_seen = True
+            await on_output(stream_name, line)
+
+        stdout_task = asyncio.create_task(
+            self._consume_stream(node, process.stdout, "stdout", stdout_lines, on_output_with_terminal_tracking)
+        )
+        stderr_task = asyncio.create_task(
+            self._consume_stream(node, process.stderr, "stderr", stderr_lines, on_output_with_terminal_tracking)
+        )
         wait_task = asyncio.create_task(process.wait())
         managed_tasks: tuple[asyncio.Task[object], ...] = (wait_task, stdout_task, stderr_task)
         loop = asyncio.get_running_loop()
@@ -347,6 +379,7 @@ class LocalRunner(Runner):
         timed_out = False
         cancelled = False
         stream_failure: BaseException | None = None
+        lingering_terminal_trace = False
 
         try:
             while True:
@@ -360,12 +393,26 @@ class LocalRunner(Runner):
                     cancelled = True
                     await self._terminate_with_fallback(process, wait_task, process_group_id)
                     break
+                if terminal_trace_seen and last_stream_activity_at is not None:
+                    if loop.time() - last_stream_activity_at >= self._TERMINATE_GRACE_SECONDS:
+                        lingering_terminal_trace = True
+                        await self._terminate_with_fallback(process, wait_task, process_group_id)
+                        break
+                if structured_output_seen and last_stream_activity_at is not None:
+                    if loop.time() - last_stream_activity_at >= self._STRUCTURED_OUTPUT_IDLE_SECONDS:
+                        lingering_terminal_trace = True
+                        await self._terminate_with_fallback(process, wait_task, process_group_id)
+                        break
                 if loop.time() >= deadline:
                     timed_out = True
                     await self._terminate_with_fallback(process, wait_task, process_group_id)
                     break
                 await asyncio.sleep(0.1)
-            drain_timeout = self._TERMINATE_GRACE_SECONDS if (timed_out or cancelled or stream_failure is not None) else max(deadline - loop.time(), 0.0)
+            drain_timeout = (
+                self._TERMINATE_GRACE_SECONDS
+                if (timed_out or cancelled or stream_failure is not None or lingering_terminal_trace)
+                else max(deadline - loop.time(), 0.0)
+            )
             pending = await self._await_tasks(managed_tasks, timeout=drain_timeout)
             if pending:
                 self._signal_process_group(process_group_id, signal.SIGKILL)

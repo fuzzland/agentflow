@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shlex
+from pathlib import Path
 from typing import Any
 
 from agentflow.prepared import ExecutionPaths, PreparedExecution
@@ -13,12 +14,13 @@ class PythonAdapter:
     """Run a Python script. The prompt is the Python code."""
 
     def prepare(self, node: NodeSpec, prompt: str, paths: ExecutionPaths) -> PreparedExecution:
+        script_name = "script.py"
         return PreparedExecution(
-            command=["python3", "-c", prompt],
+            command=["python3", str(Path(paths.target_runtime_dir) / script_name)],
             env=dict(node.env or {}),
             cwd=str(paths.host_workdir),
             trace_kind="python",
-            runtime_files={},
+            runtime_files={script_name: prompt},
             stdin=None,
         )
 

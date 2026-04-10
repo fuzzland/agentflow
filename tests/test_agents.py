@@ -6,6 +6,7 @@ from pathlib import Path
 from agentflow.agents.claude import ClaudeAdapter
 from agentflow.agents.codex import CodexAdapter
 from agentflow.agents.kimi import KimiAdapter
+from agentflow.agents.util import PythonAdapter
 from agentflow.prepared import ExecutionPaths
 from agentflow.specs import NodeSpec
 
@@ -168,6 +169,21 @@ def test_codex_adapter_can_ignore_repo_instructions_with_isolated_runtime_cwd(tm
     assert "--add-dir" in prepared.command
     add_dir_index = prepared.command.index("--add-dir")
     assert prepared.command[add_dir_index + 1] == str(tmp_path)
+
+
+def test_python_adapter_executes_materialized_runtime_script(tmp_path):
+    node = NodeSpec.model_validate(
+        {
+            "id": "utility",
+            "agent": "python",
+            "prompt": "ignored",
+        }
+    )
+
+    prepared = PythonAdapter().prepare(node, 'print("hello")', _paths(tmp_path))
+
+    assert prepared.command == ["python3", str(tmp_path / ".runtime" / "script.py")]
+    assert prepared.runtime_files == {"script.py": 'print("hello")'}
 
 
 def test_claude_adapter_uses_tools_flag_for_read_only_access(tmp_path):
