@@ -117,6 +117,7 @@ class TargetConfig(BaseModel):
     source: LocalSourceConfig | GitHubSourceConfig
     report: TargetReportConfig
     chain_context: ChainContext = Field(default_factory=ChainContext)
+    deployment_context: str | None = None
 
 
 class ContractAuditManifest(BaseModel):

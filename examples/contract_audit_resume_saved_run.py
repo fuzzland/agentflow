@@ -1,82 +1,48 @@
 from __future__ import annotations
 
+import asyncio
+import os
 from pathlib import Path
 from textwrap import dedent
 
-from agentflow import Graph, codex, fanout, merge, python_node
+from agentflow import Graph, codex, python_node
 from agentflow.audit.intake import load_manifest
+from agentflow.audit.pipeline_builder import (
+    AUDIT_MANIFEST_ENV,
+    AUDIT_TRACKS,
+    CODEX_BYPASS_EXTRA_ARGS,
+    REPO_ROOT,
+    _AUDIT_CODEX_RETRIES,
+    _AUDIT_CODEX_RETRY_BACKOFF_SECONDS,
+    _DISCOVERY_NO_PROGRESS_PATIENCE,
+    _DISCOVERY_STATE_FILENAME,
+    _deployment_context_prompt,
+    _manifest_runtime_python_node,
+)
+from agentflow.loader import load_pipeline_from_text
+from agentflow.orchestrator import Orchestrator
+from agentflow.store import RunStore
 
 
-AUDIT_MANIFEST_ENV = "AGENTFLOW_CONTRACT_AUDIT_MANIFEST"
-REPO_ROOT = Path(__file__).resolve().parents[2]
-AUDIT_TRACKS = [
-    "access-control-and-init",
-    "accounting-and-rounding",
-    "reentrancy-and-external-calls",
-    "state-machine-and-epoch-flow",
-    "upgradeability-migration-storage-layout",
-    "integration-trust-boundaries",
-]
-CODEX_BYPASS_EXTRA_ARGS = ["--dangerously-bypass-approvals-and-sandbox"]
-_DISCOVERY_STATE_FILENAME = "discovery_state.json"
-_DISCOVERY_NO_PROGRESS_PATIENCE = 3
-_DISCOVERY_MAX_ITERATIONS = 100
-_AUDIT_CODEX_RETRIES = 5
-_AUDIT_CODEX_RETRY_BACKOFF_SECONDS = 5.0
+DEFAULT_SAVED_RUN_JSON = (
+    "/data/agentenv/agentflow-audit-reports/dolomite-exchange/routers-reports/"
+    "runs/0ebd6761845d4604a90a0722c3348ef7/run.json"
+)
+DEFAULT_RUNS_DIR = "/data/agentenv/agentflow-audit-reports/dolomite-exchange/routers-reports/runs"
+RESUME_NO_PROGRESS_PATIENCE = 1
 
 
-def _manifest_runtime_preamble() -> str:
-    return dedent(
-        f"""
-        import os
-        from pathlib import Path
-
-        manifest_path = os.environ.get({AUDIT_MANIFEST_ENV!r})
-        if not manifest_path:
-            raise SystemExit(
-                "Set {AUDIT_MANIFEST_ENV} to the manifest JSON path before running this pipeline."
-            )
-        resolved_manifest_path = Path(manifest_path).expanduser()
-        if not resolved_manifest_path.is_absolute():
-            resolved_manifest_path = (Path.cwd() / resolved_manifest_path).resolve()
-        else:
-            resolved_manifest_path = resolved_manifest_path.resolve()
-        """
-    ).strip()
-
-
-def _manifest_runtime_python_node(body: str) -> str:
-    return f"{_manifest_runtime_preamble()}\n\n{dedent(body).strip()}"
-
-
-def _deployment_context_prompt(manifest) -> str:
-    context = (manifest.target.deployment_context or "").strip()
-    if context:
-        return (
-            "Deployment context provided by the operator:\n"
-            f"{context}\n\n"
-            "Use this context only when it directly invalidates exploit preconditions.\n"
-            "If the context is insufficient or ambiguous, keep the finding.\n"
-        )
-    return (
-        "No deployment context was provided.\n"
-        "Reject a finding only when the code itself proves it is non-actionable.\n"
-        "If there is any uncertainty, keep the finding.\n"
-    )
-
-
-def build_contract_audit_graph(manifest_path: str) -> Graph:
+def build_resume_graph(manifest_path: str, saved_run_json: str) -> Graph:
     manifest = load_manifest(manifest_path)
     selected_tracks = AUDIT_TRACKS[: min(manifest.run.parallel_shards, len(AUDIT_TRACKS))]
     poc_workspace_dir = Path(manifest.run.artifacts_dir) / "workspace" / "foundry_project"
-    discovery_state_path = Path(manifest.run.artifacts_dir) / "workspace" / _DISCOVERY_STATE_FILENAME
     deployment_context_prompt = _deployment_context_prompt(manifest)
 
     with Graph(
-        "contract-audit-example",
+        "contract-audit-resume",
         working_dir=str(REPO_ROOT),
-        concurrency=len(selected_tracks),
-        max_iterations=_DISCOVERY_MAX_ITERATIONS,
+        concurrency=1,
+        max_iterations=10,
     ) as graph:
         intake_target = python_node(
             task_id="intake_target",
@@ -161,142 +127,39 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
                 """
             ),
         )
-        surface_map = python_node(
-            task_id="surface_map",
+        load_saved_shards = python_node(
+            task_id="load_saved_shards",
             code=dedent(
-                """
+                f"""
                 import json
-                import re
                 from pathlib import Path
 
-                prepared = json.loads(\"\"\"{{ nodes.prepare_foundry_workspace.output }}\"\"\")
-                discovery_state = json.loads(\"\"\"{{ nodes.load_discovery_state.output }}\"\"\")
-                workspace_dir = Path(prepared["workspace_dir"])
-                src_root = workspace_dir / "src"
-                out_root = workspace_dir / "out"
+                from agentflow.audit.reporting import normalize_shard_findings
 
-                def _relative(path: Path) -> str:
-                    return path.relative_to(workspace_dir).as_posix()
-
-                def _scan_hits(pattern: str, *, max_hits: int = 40) -> list[dict[str, object]]:
-                    regex = re.compile(pattern)
-                    hits: list[dict[str, object]] = []
-                    for path in sorted(src_root.rglob("*.sol")):
-                        try:
-                            lines = path.read_text(encoding="utf-8").splitlines()
-                        except UnicodeDecodeError:
-                            continue
-                        for idx, line in enumerate(lines, start=1):
-                            if not regex.search(line):
-                                continue
-                            hits.append(
-                                {
-                                    "file": _relative(path),
-                                    "line": idx,
-                                    "text": line.strip()[:200],
-                                }
-                            )
-                            if len(hits) >= max_hits:
-                                return hits
-                    return hits
-
-                contract_methods: list[dict[str, object]] = []
-                for artifact_path in sorted(out_root.rglob("*.json")):
-                    if "build-info" in artifact_path.parts:
-                        continue
-                    try:
-                        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
-                    except (json.JSONDecodeError, UnicodeDecodeError):
-                        continue
-                    abi = artifact.get("abi")
-                    if not isinstance(abi, list):
-                        continue
-                    methods = [
-                        {
-                            "name": item["name"],
-                            "stateMutability": item.get("stateMutability"),
-                        }
-                        for item in abi
-                        if isinstance(item, dict) and item.get("type") == "function" and item.get("name")
-                    ]
-                    if not methods:
-                        continue
-                    contract_methods.append(
-                        {
-                            "artifact": artifact_path.relative_to(out_root).as_posix(),
-                            "functions": methods[:25],
-                        }
+                run = json.loads(Path({saved_run_json!r}).read_text(encoding="utf-8"))
+                selected_tracks = {selected_tracks!r}
+                shard_outputs = []
+                for index, track in enumerate(selected_tracks):
+                    node = run["nodes"][f"audit_shard_{{index}}"]
+                    output = node.get("output")
+                    if not isinstance(output, str) or not output.strip():
+                        raise SystemExit(f"missing saved output for audit_shard_{{index}}")
+                    shard_outputs.append(
+                        {{
+                            "track": track,
+                            "output": output,
+                            "final_response": node.get("final_response"),
+                            "stdout": (
+                                node.get("stdout")
+                                if isinstance(node.get("stdout"), str)
+                                else "\\n".join(node.get("stdout_lines", []))
+                            ),
+                            "trace_events": node.get("trace_events"),
+                        }}
                     )
-                    if len(contract_methods) >= 20:
-                        break
-
-                payload = {
-                    "workspace_dir": str(workspace_dir),
-                    "foundry_toml_path": prepared["foundry_toml_path"],
-                    "remappings_path": prepared.get("remappings_path"),
-                    "discovery_state": discovery_state,
-                    "source_files": [_relative(path) for path in sorted(src_root.rglob("*.sol"))],
-                    "contract_methods": contract_methods,
-                    "privileged_entrypoints": _scan_hits(r"\\bonlyOwner\\b|requireIsGlobalOperator\\(|requireIsOperator\\("),
-                    "external_call_boundaries": _scan_hits(
-                        r"\\.call\\(|transfer\\(|transferFrom\\(|exchange\\(|getExchangeCost\\(|getTradeCost\\(|callFunction\\(|onInternalBalanceChange\\("
-                    ),
-                    "upgrade_and_init_signals": _scan_hits(
-                        r"delegatecall|proxy|implementation|upgrade|initialize\\(|initializer|reinitialize|tx\\.origin"
-                    ),
-                    "accounting_hotspots": _scan_hits(
-                        r"getNewParAndDeltaWei\\(|setPar\\(|setParFromDeltaWei\\(|getNumExcessTokens\\(|weiToPar\\(|parToWei\\("
-                    ),
-                }
-                print(json.dumps(payload, indent=2))
+                print(json.dumps(normalize_shard_findings(shard_outputs), indent=2))
                 """
             ).strip(),
-        )
-        audit_shard = fanout(
-            codex(
-                task_id="audit_shard",
-                prompt=(
-                    "Audit track: {{ item.track }}\n\n"
-                    "Surface map:\n{{ nodes.surface_map.output }}\n\n"
-                    "Discovery state:\n{{ nodes.load_discovery_state.output }}\n\n"
-                    "Return only structured candidate findings with precise source references, "
-                    "attack preconditions, and remediation notes.\n"
-                    "Keep the pass bounded and efficient: prefer targeted reads, avoid dumping long file contents, "
-                    "and do not narrate progress.\n"
-                    "Avoid repeating previously accepted or rejected findings unless you have materially new evidence.\n"
-                    "Do not write a markdown report."
-                ),
-                tools="read_only",
-                extra_args=CODEX_BYPASS_EXTRA_ARGS,
-                retries=_AUDIT_CODEX_RETRIES,
-                retry_backoff_seconds=_AUDIT_CODEX_RETRY_BACKOFF_SECONDS,
-                skills=[
-                    "entry-point-analyzer::default",
-                    "static-analysis::default",
-                    "building-secure-contracts::default",
-                    "variant-analysis::default",
-                    "sharp-edges::default",
-                    "insecure-defaults::default",
-                ],
-            ),
-            [{"track": track} for track in selected_tracks],
-        )
-        finding_prepare = merge(
-            python_node(
-                task_id="finding_prepare",
-                code=dedent(
-                    '''
-                    import json
-
-                    from agentflow.audit.reporting import normalize_shard_findings
-
-                    shard_outputs = json.loads(r"""{{ item.scope.with_output.nodes | tojson }}""")
-                    print(json.dumps(normalize_shard_findings(shard_outputs), indent=2))
-                    '''
-                ).strip(),
-            ),
-            audit_shard,
-            size=len(selected_tracks),
         )
         finding_reduce = codex(
             task_id="finding_reduce",
@@ -304,7 +167,7 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
                 "Merge these normalized track-specific outputs into a canonical candidate finding set.\n"
                 "Deduplicate by root cause and exploit path, normalize severity, and keep the "
                 "best evidence references.\n\n"
-                "{{ nodes.finding_prepare_0.output }}"
+                "{{ nodes.load_saved_shards.output }}"
             ),
             tools="read_only",
             extra_args=CODEX_BYPASS_EXTRA_ARGS,
@@ -324,6 +187,7 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
             extra_args=CODEX_BYPASS_EXTRA_ARGS,
             retries=_AUDIT_CODEX_RETRIES,
             retry_backoff_seconds=_AUDIT_CODEX_RETRY_BACKOFF_SECONDS,
+            target={"kind": "local", "cwd": str(poc_workspace_dir)},
             skills=[
                 "differential-review::default",
                 "spec-to-code-compliance::default",
@@ -382,7 +246,7 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
                 state, decision = advance_discovery_state(
                     state_path,
                     findings,
-                    no_progress_patience={_DISCOVERY_NO_PROGRESS_PATIENCE},
+                    no_progress_patience={RESUME_NO_PROGRESS_PATIENCE},
                 )
                 print(
                     json.dumps(
@@ -639,9 +503,27 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
             ).strip(),
         )
 
-        intake_target >> materialize_target >> prepare_foundry_workspace >> load_discovery_state >> surface_map >> audit_shard >> finding_prepare >> finding_reduce
+        intake_target >> materialize_target >> prepare_foundry_workspace >> load_discovery_state >> load_saved_shards >> finding_reduce
         finding_reduce >> evidence_review >> evidence_gate >> novelty_gate >> discovery_finalize >> poc_author >> poc_verify >> final_adjudication
         novelty_gate.on_failure >> load_discovery_state
         final_adjudication >> report_build >> report_review >> report_finalize_build >> publish_artifacts
 
     return graph
+
+
+async def main() -> None:
+    manifest_path = os.environ[AUDIT_MANIFEST_ENV]
+    saved_run_json = os.environ.get("AGENTFLOW_SAVED_RUN_JSON", DEFAULT_SAVED_RUN_JSON)
+    runs_dir = os.environ.get("AGENTFLOW_RUNS_DIR", DEFAULT_RUNS_DIR)
+    graph = build_resume_graph(manifest_path, saved_run_json)
+    pipeline = load_pipeline_from_text(graph.to_json(), base_dir=REPO_ROOT)
+    store = RunStore(runs_dir)
+    orchestrator = Orchestrator(store=store, max_concurrent_runs=1)
+    record = await orchestrator.submit(pipeline)
+    print(f"RUN_ID {record.id}", flush=True)
+    completed = await orchestrator.wait(record.id, timeout=None)
+    print(f"STATUS {completed.status.value}", flush=True)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from agentflow.audit.models import ComponentRef, EvidenceRef, FindingRecord, PocRecord, ReportManifest, ReviewRecord
-from agentflow.audit.reporting import extract_json_document, public_findings_projection, render_audit_report
+import json
+
+from agentflow.audit.reporting import extract_json_document, public_findings_projection, render_audit_report, write_report_bundle
 
 
 def _finding(
@@ -80,10 +82,10 @@ def test_render_audit_report_orders_findings_and_renders_validation_status_label
 
     assert report.index("## Findings\n\n### F-001") < report.index("\n### F-002")
     assert report.index("\n### F-002") < report.index("\n### F-010")
-    assert report.index("\n### F-010") < report.index("\n### F-020")
     assert "Validation Status: PoC Confirmed" in report
     assert "Validation Status: Source Confirmed" in report
-    assert "Validation Status: Rejected" in report
+    assert "Validation Status: Rejected" not in report
+    assert "### F-020" not in report
     assert "PoC / Reproduction: test/PoC.t.sol" in report
     assert "Chain Context" in report
     assert "Contract Address: https://etherscan.io/address/0x1234" in report
@@ -264,3 +266,28 @@ def test_extract_json_document_accepts_trailing_text_after_json_object():
     payload = extract_json_document("{\"status\": \"ok\"}\nFinal note.\n")
 
     assert payload == {"status": "ok"}
+
+
+def test_write_report_bundle_filters_rejected_findings_from_customer_outputs(tmp_path):
+    manifest = ReportManifest(
+        project_name="TokenVault",
+        audit_scope="contracts",
+        source_mode="local snapshot",
+        source_identifier="local://snapshot",
+    )
+    findings = [
+        _finding("F-010", severity="high", validation_status="source_confirmed", component_file="contracts/High.sol"),
+        _finding("F-020", severity="low", validation_status="rejected", component_file="contracts/Low.sol"),
+    ]
+
+    write_report_bundle(tmp_path, manifest, findings)
+
+    report_text = (tmp_path / "AUDIT_REPORT.md").read_text(encoding="utf-8")
+    public_findings = json.loads((tmp_path / "findings.json").read_text(encoding="utf-8"))
+    summary = json.loads((tmp_path / "audit_summary.json").read_text(encoding="utf-8"))
+
+    assert "### F-010" in report_text
+    assert "### F-020" not in report_text
+    assert [item["id"] for item in public_findings] == ["F-010"]
+    assert summary["total_findings"] == 1
+    assert summary["validation_counts"]["rejected"] == 0
