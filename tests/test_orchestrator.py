@@ -919,6 +919,40 @@ async def test_orchestrator_retries_failed_nodes(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_does_not_skip_downstream_while_upstream_is_retrying(tmp_path: Path):
+    orchestrator = make_orchestrator(tmp_path)
+    pipeline = PipelineSpec.model_validate(
+        {
+            "name": "retry-downstream",
+            "working_dir": str(tmp_path),
+            "nodes": [
+                {
+                    "id": "flaky",
+                    "agent": "codex",
+                    "prompt": "recovered",
+                    "retries": 1,
+                    "retry_backoff_seconds": 0.2,
+                },
+                {
+                    "id": "downstream",
+                    "agent": "codex",
+                    "depends_on": ["flaky"],
+                    "prompt": "downstream done",
+                },
+            ],
+        }
+    )
+
+    run = await orchestrator.submit(pipeline)
+    completed = await orchestrator.wait(run.id, timeout=5)
+
+    assert completed.status.value == "completed"
+    assert completed.nodes["flaky"].status.value == "completed"
+    assert completed.nodes["downstream"].status.value == "completed"
+    assert completed.nodes["downstream"].output == "downstream done"
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_retry_isolates_final_capture_from_failed_attempt_stdout(tmp_path: Path):
     orchestrator = make_orchestrator(tmp_path)
     pipeline = PipelineSpec.model_validate(
