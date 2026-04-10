@@ -166,7 +166,31 @@ def build_resume_graph(manifest_path: str, saved_run_json: str) -> Graph:
             prompt=(
                 "Merge these normalized track-specific outputs into a canonical candidate finding set.\n"
                 "Deduplicate by root cause and exploit path, normalize severity, and keep the "
-                "best evidence references.\n\n"
+                "best evidence references.\n"
+                "Return only JSON with this shape:\n"
+                '{\n'
+                '  "dedupe_summary": {\n'
+                '    "input_findings": 1,\n'
+                '    "canonical_findings": 1,\n'
+                '    "merged_duplicates": [{"canonical_id":"CAN-001","merged_from":["x","y"],"reason":"..."}]\n'
+                '  },\n'
+                '  "canonical_findings": [\n'
+                '    {\n'
+                '      "status":"candidate",\n'
+                '      "canonical_id":"CAN-001",\n'
+                '      "title":"...",\n'
+                '      "severity":"high",\n'
+                '      "confidence":"high",\n'
+                '      "tracks":["..."],\n'
+                '      "merged_from":["..."],\n'
+                '      "affected_contracts":["..."],\n'
+                '      "root_cause":"...",\n'
+                '      "exploit_path":"...",\n'
+                '      "impact":"...",\n'
+                '      "best_evidence_refs":["path:line-line"]\n'
+                '    }\n'
+                '  ]\n'
+                '}\n\n'
                 "{{ nodes.load_saved_shards.output }}"
             ),
             tools="read_only",
@@ -178,7 +202,26 @@ def build_resume_graph(manifest_path: str, saved_run_json: str) -> Graph:
             task_id="evidence_review",
             prompt=(
                 "Review the reduced candidate findings against the source and narrow, reject, or "
-                "confirm each item with explicit source-grounded reasoning.\n\n"
+                "confirm each item with explicit source-grounded reasoning.\n"
+                "Return only a JSON array of finding reviews with this shape:\n"
+                "[\n"
+                "  {\n"
+                '    "id":"CAN-001",\n'
+                '    "title":"...",\n'
+                '    "severity":"high",\n'
+                '    "category":"...",\n'
+                '    "status":"validated",\n'
+                '    "validation_status":"source_confirmed|rejected",\n'
+                '    "component":{"file":"...","symbol":null,"lines":[1,2]},\n'
+                '    "summary":"...",\n'
+                '    "root_cause":"...",\n'
+                '    "attack_scenario":"...",\n'
+                '    "evidence":[{"file":"...","start_line":1,"end_line":2,"snippet_ref":"..."}],\n'
+                '    "poc":{"eligible":true,"status":"not_attempted","test_path":null},\n'
+                '    "review":{"disposition":"confirmed|narrowed|merged|rejected|requires_manual_poc_design","notes":"..."},\n'
+                '    "dedup_fingerprint":"..."\n'
+                "  }\n"
+                "]\n\n"
                 f"{deployment_context_prompt}\n"
                 "Discovery state:\n{{ nodes.load_discovery_state.output }}\n\n"
                 "{{ nodes.finding_reduce.output }}"
