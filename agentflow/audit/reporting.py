@@ -20,6 +20,12 @@ _FREE_TEXT_PATH_PATTERNS = (
 _TRAILING_PATH_PUNCTUATION = ".,:;)]}"
 
 
+def customer_visible_findings(findings: list[FindingRecord]) -> list[FindingRecord]:
+    return sort_findings(
+        [finding for finding in findings if finding.validation_status != "rejected"]
+    )
+
+
 def sort_findings(findings: list[FindingRecord]) -> list[FindingRecord]:
     return sorted(findings, key=lambda finding: (_SEVERITY_ORDER[finding.severity], finding.id))
 
@@ -55,20 +61,122 @@ def _sanitize_text_paths(text: str) -> str:
 
 def extract_json_document(text: str) -> object:
     decoder = json.JSONDecoder()
+    best_payload: object | None = None
+    best_end = -1
     for index, char in enumerate(text):
         if char not in "[{":
             continue
         try:
-            payload, _ = decoder.raw_decode(text[index:])
+            payload, end = decoder.raw_decode(text[index:])
         except json.JSONDecodeError:
             continue
-        return payload
+        absolute_end = index + end
+        if absolute_end > best_end:
+            best_payload = payload
+            best_end = absolute_end
+    if best_payload is not None:
+        return best_payload
     raise ValueError("no JSON document found in text")
+
+
+def _extract_findings_list(text: str) -> list[object]:
+    payload = extract_json_document(text)
+    if not isinstance(payload, list):
+        raise ValueError("shard findings must decode to a JSON list")
+    return payload
+
+
+def _candidate_json_strings_from_stdout(stdout_text: str) -> list[str]:
+    candidates: list[str] = []
+    for line in stdout_text.splitlines():
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        item = payload.get("item")
+        if isinstance(item, dict):
+            item_type = item.get("type")
+            if item_type in {"agent_message", "agentMessage"}:
+                text = item.get("text")
+                if isinstance(text, str):
+                    candidates.append(text)
+            elif item_type == "command_execution":
+                text = item.get("aggregated_output")
+                if isinstance(text, str):
+                    candidates.append(text)
+        if payload.get("type") == "response.output_item.done":
+            item = payload.get("item")
+            if isinstance(item, dict) and item.get("type") == "message":
+                parts = item.get("content")
+                if isinstance(parts, list):
+                    text_parts = [
+                        str(part.get("text"))
+                        for part in parts
+                        if isinstance(part, dict) and part.get("text") is not None
+                    ]
+                    if text_parts:
+                        candidates.append("\n".join(text_parts))
+    return candidates
+
+
+def _candidate_json_strings_from_trace_events(trace_events: object) -> list[str]:
+    candidates: list[str] = []
+    if not isinstance(trace_events, list):
+        return candidates
+    for event in trace_events:
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("kind")
+        content = event.get("content")
+        if kind in {"assistant_message", "structured_output", "completed"} and isinstance(content, str):
+            candidates.append(content)
+    return candidates
+
+
+def normalize_shard_findings(shard_outputs: list[dict[str, object]]) -> list[dict[str, object]]:
+    normalized: list[dict[str, object]] = []
+    for shard in shard_outputs:
+        track = str(shard.get("track", "")).strip()
+        findings: list[object] | None = None
+        for field in ("output", "final_response"):
+            candidate = shard.get(field)
+            if not isinstance(candidate, str) or not candidate.strip():
+                continue
+            try:
+                findings = _extract_findings_list(candidate)
+                break
+            except ValueError:
+                continue
+        if findings is None:
+            stdout_text = shard.get("stdout")
+            if isinstance(stdout_text, str) and stdout_text.strip():
+                for candidate in _candidate_json_strings_from_stdout(stdout_text):
+                    try:
+                        findings = _extract_findings_list(candidate)
+                    except ValueError:
+                        continue
+        if findings is None:
+            for candidate in _candidate_json_strings_from_trace_events(shard.get("trace_events")):
+                try:
+                    findings = _extract_findings_list(candidate)
+                except ValueError:
+                    continue
+        if findings is None:
+            raise ValueError("shard findings must decode to a JSON list")
+        normalized.append(
+            {
+                "track": track,
+                "findings": findings,
+            }
+        )
+    return normalized
 
 
 def public_findings_projection(findings: list[FindingRecord]) -> list[dict[str, object]]:
     projected: list[dict[str, object]] = []
-    for finding in sort_findings(findings):
+    for finding in customer_visible_findings(findings):
         payload = finding.model_dump(mode="json")
         payload["title"] = _sanitize_text_paths(str(payload["title"]))
         payload["summary"] = _sanitize_text_paths(str(payload["summary"]))
@@ -109,7 +217,7 @@ def _validation_counts(findings: list[FindingRecord]) -> dict[str, int]:
 
 
 def render_audit_report(manifest: ReportManifest, findings: list[FindingRecord]) -> str:
-    ordered_findings = sort_findings(findings)
+    ordered_findings = customer_visible_findings(findings)
     severity_counts = _severity_counts(ordered_findings)
 
     lines: list[str] = []
@@ -166,7 +274,7 @@ def write_report_bundle(report_dir: str | Path, manifest: ReportManifest, findin
     output_dir = Path(report_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    ordered_findings = sort_findings(findings)
+    ordered_findings = customer_visible_findings(findings)
     projected_findings = public_findings_projection(ordered_findings)
     report_text = render_audit_report(manifest, ordered_findings)
     summary_payload = {

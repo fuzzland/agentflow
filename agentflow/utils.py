@@ -15,6 +15,8 @@ _SENSITIVE_SHELL_ASSIGNMENT_PATTERN = re.compile(
     r"(?P<lead>^|[\s;|&()])(?P<export>export\s+)?(?P<key>[A-Za-z_][A-Za-z0-9_-]*)(?P<sep>=)(?P<value>\"(?:[^\"\\]|\\.)*\"|'[^']*'|`[^`]*`|[^\s;|&()]+)"
 )
 
+_TEMPLATE_ENV.filters["tojson"] = lambda value: json.dumps(value, ensure_ascii=False)
+
 
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
