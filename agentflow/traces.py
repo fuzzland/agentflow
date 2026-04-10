@@ -38,6 +38,22 @@ def _stringify(value: Any) -> str:
     return ""
 
 
+def _looks_like_findings_json_array(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped.startswith("["):
+        return False
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, list) or not payload:
+        return False
+    if not all(isinstance(item, dict) for item in payload):
+        return False
+    required_any = {"id", "title", "dedup_fingerprint", "severity", "validation_status"}
+    return all(bool(required_any & set(item.keys())) for item in payload)
+
+
 @dataclass(slots=True)
 class BaseTraceParser:
     node_id: str
@@ -97,6 +113,10 @@ class CodexTraceParser(BaseTraceParser):
             text = line.rstrip()
             self.remember(text)
             return [self.emit("stdout", "stdout", text, line)] if text else []
+        if not isinstance(payload, dict):
+            text = _stringify(payload)
+            self.remember(text)
+            return [self.emit("stdout", "stdout", text, payload)] if text else []
 
         event_type = payload.get("type") or payload.get("method") or payload.get("event") or "codex"
         events: list[NormalizedTraceEvent] = []
@@ -124,6 +144,11 @@ class CodexTraceParser(BaseTraceParser):
             item_type = item.get("type") or item.get("details", {}).get("type") or "item"
             if item_type in {"agentMessage", "agent_message"} and text:
                 self.remember(text)
+            elif item_type == "command_execution":
+                aggregated_output = _stringify(item.get("aggregated_output"))
+                if _looks_like_findings_json_array(aggregated_output):
+                    self.remember(aggregated_output)
+                    events.append(self.emit("structured_output", "Structured output", aggregated_output, payload))
             events.append(self.emit("item_completed", f"Item completed: {item_type}", text, payload))
         elif event_type in {"item.started", "item/started"}:
             item = payload.get("item") or payload.get("params", {}).get("item") or {}

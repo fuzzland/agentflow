@@ -30,6 +30,36 @@ def test_codex_trace_parser_keeps_real_error_items():
     assert events[0].content == "permission denied"
 
 
+def test_codex_trace_parser_handles_non_object_json_payload():
+    parser = create_trace_parser(AgentKind.CODEX, "plan")
+
+    events = parser.feed("42")
+
+    assert len(events) == 1
+    assert events[0].kind == "stdout"
+    assert events[0].content == "42"
+
+
+def test_codex_trace_parser_remembers_json_command_output():
+    parser = create_trace_parser(AgentKind.CODEX, "plan")
+
+    parser.feed(
+        '{"type":"item.completed","item":{"id":"item_1","type":"command_execution","aggregated_output":"[{\\"id\\": \\"CAN-01\\", \\"title\\": \\"Issue\\", \\"severity\\": \\"high\\"}]","exit_code":0,"status":"completed"}}'
+    )
+
+    assert parser.finalize() == '[{"id": "CAN-01", "title": "Issue", "severity": "high"}]'
+
+
+def test_codex_trace_parser_ignores_non_finding_json_command_output():
+    parser = create_trace_parser(AgentKind.CODEX, "plan")
+
+    parser.feed(
+        '{"type":"item.completed","item":{"id":"item_1","type":"command_execution","aggregated_output":"{\\"type\\": \\"function\\", \\"name\\": \\"setSlasher\\"}","exit_code":0,"status":"completed"}}'
+    )
+
+    assert parser.finalize() == ""
+
+
 def test_claude_trace_parser_extracts_result():
     parser = create_trace_parser(AgentKind.CLAUDE, "implement")
     parser.feed('{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}')

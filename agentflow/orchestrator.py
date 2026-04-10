@@ -839,7 +839,11 @@ class Orchestrator:
                 node_id
                 for node_id in list(remaining)
                 if node_id not in cycle_nodes  # don't skip any node in a cycle
-                and any(record.nodes[dependency].status in {NodeStatus.FAILED, NodeStatus.SKIPPED, NodeStatus.CANCELLED} for dependency in node_map[node_id].depends_on)
+                and any(
+                    dependency not in in_progress
+                    and record.nodes[dependency].status in {NodeStatus.FAILED, NodeStatus.SKIPPED, NodeStatus.CANCELLED}
+                    for dependency in node_map[node_id].depends_on
+                )
             ]
             for node_id in blocked:
                 record.nodes[node_id].status = NodeStatus.SKIPPED

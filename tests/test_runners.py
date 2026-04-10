@@ -68,6 +68,56 @@ def _parent_exits_but_descendant_finishes_command(message: str) -> list[str]:
     return [sys.executable, "-c", parent_code]
 
 
+def _codex_parent_completes_but_descendant_holds_pipe_command(pid_file: Path, *, sleep_seconds: int) -> list[str]:
+    child_code = (
+        "from pathlib import Path; import os, time; "
+        f"Path({str(pid_file)!r}).write_text(str(os.getpid()), encoding='utf-8'); "
+        f"time.sleep({sleep_seconds})"
+    )
+    parent_code = (
+        "import json, subprocess, sys; "
+        f"subprocess.Popen([sys.executable, '-c', {child_code!r}], "
+        "stdout=sys.stdout, stderr=sys.stderr, close_fds=False); "
+        'print(json.dumps({"type": "response.output_item.done", "item": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "codex ok"}]}}), flush=True); '
+        'print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1}}), flush=True)'
+    )
+    return [sys.executable, "-c", parent_code]
+
+
+def _codex_parent_emits_json_command_output_but_descendant_holds_pipe_command(
+    pid_file: Path, *, sleep_seconds: int
+) -> list[str]:
+    child_code = (
+        "from pathlib import Path; import os, time; "
+        f"Path({str(pid_file)!r}).write_text(str(os.getpid()), encoding='utf-8'); "
+        f"time.sleep({sleep_seconds})"
+    )
+    parent_code = (
+        "import json, subprocess, sys; "
+        f"subprocess.Popen([sys.executable, '-c', {child_code!r}], "
+        "stdout=sys.stdout, stderr=sys.stderr, close_fds=False); "
+        'print(json.dumps({"type": "item.completed", "item": {"id": "item_1", "type": "command_execution", "command": "python - <<\'PY\'", "aggregated_output": "[{\\"id\\": \\"CAN-01\\", \\"title\\": \\"Issue\\", \\"severity\\": \\"high\\"}]", "exit_code": 0, "status": "completed"}}), flush=True)'
+    )
+    return [sys.executable, "-c", parent_code]
+
+
+def _claude_parent_emits_assistant_message_but_descendant_holds_pipe_command(
+    pid_file: Path, *, sleep_seconds: int
+) -> list[str]:
+    child_code = (
+        "from pathlib import Path; import os, time; "
+        f"Path({str(pid_file)!r}).write_text(str(os.getpid()), encoding='utf-8'); "
+        f"time.sleep({sleep_seconds})"
+    )
+    parent_code = (
+        "import json, subprocess, sys; "
+        f"subprocess.Popen([sys.executable, '-c', {child_code!r}], "
+        "stdout=sys.stdout, stderr=sys.stderr, close_fds=False); "
+        'print(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "still working"}]}}), flush=True)'
+    )
+    return [sys.executable, "-c", parent_code]
+
+
 @pytest.mark.asyncio
 async def test_local_runner_uses_configured_shell(tmp_path: Path):
     shell_env = tmp_path / "shell.env"
@@ -745,6 +795,139 @@ async def test_local_runner_waits_for_descendant_output_after_parent_exit(tmp_pa
     assert result.exit_code == 0
     assert result.stdout_lines == ["descendant-ok"]
     assert result.stderr_lines == []
+
+
+@pytest.mark.asyncio
+async def test_local_runner_finishes_after_terminal_codex_trace_even_if_descendant_holds_pipe(tmp_path: Path):
+    pid_file = tmp_path / "descendant.pid"
+    node = NodeSpec.model_validate(
+        {
+            "id": "terminal-trace-descendant-holds-pipe",
+            "agent": "codex",
+            "prompt": "hi",
+            "timeout_seconds": 30,
+        }
+    )
+    prepared = PreparedExecution(
+        command=_codex_parent_completes_but_descendant_holds_pipe_command(pid_file, sleep_seconds=60),
+        env={},
+        cwd=str(tmp_path),
+        trace_kind="codex",
+    )
+
+    descendant_pid: int | None = None
+    result = None
+    try:
+        result = await asyncio.wait_for(
+            LocalRunner().execute(node, prepared, _paths(tmp_path), _noop_output, lambda: False),
+            timeout=3,
+        )
+    finally:
+        if pid_file.exists():
+            descendant_pid = int(pid_file.read_text(encoding="utf-8"))
+            if _pid_exists(descendant_pid):
+                os.kill(descendant_pid, signal.SIGKILL)
+                await _wait_for_pid_exit(descendant_pid)
+
+    assert result is not None
+    assert result.cancelled is False
+    assert result.timed_out is False
+    assert result.exit_code == 0
+    assert result.stdout_lines == [
+        '{"type": "response.output_item.done", "item": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "codex ok"}]}}',
+        '{"type": "turn.completed", "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1}}',
+    ]
+    assert result.stderr_lines == []
+    assert descendant_pid is not None
+    assert _pid_exists(descendant_pid) is False
+
+
+@pytest.mark.asyncio
+async def test_local_runner_finishes_after_structured_codex_command_output_idle(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(LocalRunner, "_STRUCTURED_OUTPUT_IDLE_SECONDS", 0.2)
+
+    pid_file = tmp_path / "descendant-structured.pid"
+    node = NodeSpec.model_validate(
+        {
+            "id": "structured-output-descendant-holds-pipe",
+            "agent": "codex",
+            "prompt": "hi",
+            "timeout_seconds": 30,
+        }
+    )
+    prepared = PreparedExecution(
+        command=_codex_parent_emits_json_command_output_but_descendant_holds_pipe_command(
+            pid_file, sleep_seconds=60
+        ),
+        env={},
+        cwd=str(tmp_path),
+        trace_kind="codex",
+    )
+
+    descendant_pid: int | None = None
+    result = None
+    try:
+        result = await asyncio.wait_for(
+            LocalRunner().execute(node, prepared, _paths(tmp_path), _noop_output, lambda: False),
+            timeout=3,
+        )
+    finally:
+        if pid_file.exists():
+            descendant_pid = int(pid_file.read_text(encoding="utf-8"))
+            if _pid_exists(descendant_pid):
+                os.kill(descendant_pid, signal.SIGKILL)
+                await _wait_for_pid_exit(descendant_pid)
+
+    assert result is not None
+    assert result.cancelled is False
+    assert result.timed_out is False
+    assert result.exit_code == 0
+    assert result.stdout_lines == [
+        '{"type": "item.completed", "item": {"id": "item_1", "type": "command_execution", "command": "python - <<\'PY\'", "aggregated_output": "[{\\"id\\": \\"CAN-01\\", \\"title\\": \\"Issue\\", \\"severity\\": \\"high\\"}]", "exit_code": 0, "status": "completed"}}'
+    ]
+    assert result.stderr_lines == []
+    assert descendant_pid is not None
+    assert _pid_exists(descendant_pid) is False
+
+
+@pytest.mark.asyncio
+async def test_local_runner_does_not_finish_after_non_terminal_claude_message_idle(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(LocalRunner, "_STRUCTURED_OUTPUT_IDLE_SECONDS", 0.2)
+
+    pid_file = tmp_path / "descendant-claude.pid"
+    node = NodeSpec.model_validate(
+        {
+            "id": "claude-assistant-message-descendant-holds-pipe",
+            "agent": "claude",
+            "prompt": "hi",
+            "timeout_seconds": 30,
+        }
+    )
+    prepared = PreparedExecution(
+        command=_claude_parent_emits_assistant_message_but_descendant_holds_pipe_command(
+            pid_file, sleep_seconds=60
+        ),
+        env={},
+        cwd=str(tmp_path),
+        trace_kind="claude",
+    )
+
+    descendant_pid: int | None = None
+    try:
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                LocalRunner().execute(node, prepared, _paths(tmp_path), _noop_output, lambda: False),
+                timeout=1,
+            )
+    finally:
+        if pid_file.exists():
+            descendant_pid = int(pid_file.read_text(encoding="utf-8"))
+            if _pid_exists(descendant_pid):
+                os.kill(descendant_pid, signal.SIGKILL)
+                await _wait_for_pid_exit(descendant_pid)
+
+    assert descendant_pid is not None
+    assert _pid_exists(descendant_pid) is False
 
 
 def test_local_runner_plan_execution_includes_shell_wrapper(tmp_path: Path):
