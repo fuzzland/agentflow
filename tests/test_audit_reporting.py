@@ -402,6 +402,56 @@ def test_render_package_readme_includes_customer_summary_verification_and_delive
     assert "execution_summary.md" not in readme
 
 
+def test_render_package_readme_prefers_foundry_total_summary_when_present(tmp_path):
+    package_dir = tmp_path / "routers-reports"
+    workspace_dir = package_dir / "artifacts" / "workspace" / "foundry_project"
+    workspace_dir.mkdir(parents=True)
+    manifest = ContractAuditManifest(
+        target=TargetConfig(
+            source=LocalSourceConfig(kind="local", local_path=tmp_path / "source"),
+            report=TargetReportConfig(project_name="Routers", audit_scope="src/routers"),
+        ),
+        run=RunConfig(artifacts_dir=str(package_dir / "artifacts"), parallel_shards=6),
+        policy=PolicyConfig(),
+    )
+    report_manifest = ReportManifest(
+        project_name="Routers",
+        audit_scope="src/routers",
+        source_mode="local snapshot",
+        source_identifier="snapshot:test",
+    )
+    findings = [
+        _finding(
+            "CAN-01",
+            severity="high",
+            validation_status="poc_confirmed",
+            component_file="src/routers/RouterBase.sol",
+            poc_status="passed",
+            poc_test_path="test/security/RouterPoC.t.sol",
+        )
+    ]
+    verification = {
+        "workspace": str(workspace_dir),
+        "build": {"status": "passed", "command": "forge build", "exit_code": 0},
+        "test": {"status": "passed", "command": "forge test -vvv", "exit_code": 0},
+        "stdout": (
+            "Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 1.67ms (454.05us CPU time)\n"
+            "Ran 4 test suites in 9.67ms (6.91ms CPU time): 11 tests passed, 0 failed, 0 skipped (11 total tests)\n"
+        ),
+        "stderr": "",
+    }
+
+    readme = render_package_readme(
+        package_dir,
+        manifest,
+        report_manifest,
+        findings,
+        verification=verification,
+    )
+
+    assert "- PoC suite: `11 passed, 0 failed, 0 skipped`" in readme
+
+
 def test_write_package_readme_removes_legacy_execution_summary(tmp_path):
     source_dir = tmp_path / "source"
     source_dir.mkdir()

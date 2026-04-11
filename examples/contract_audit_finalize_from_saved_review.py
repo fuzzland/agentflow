@@ -15,6 +15,7 @@ from agentflow.audit.pipeline_builder import AUDIT_MANIFEST_ENV, _manifest_runti
 
 
 REVIEWED_FINDINGS_ENV = "AGENTFLOW_CONTRACT_AUDIT_REVIEWED_FINDINGS_PATH"
+SAVED_POC_VERIFY_RUN_ID_ENV = "AGENTFLOW_CONTRACT_AUDIT_POC_VERIFY_RUN_ID"
 
 
 manifest_path = os.environ.get(AUDIT_MANIFEST_ENV)
@@ -39,6 +40,58 @@ if not reviewed_findings_path.is_absolute():
     reviewed_findings_path = (REPO_ROOT / reviewed_findings_path).resolve()
 else:
     reviewed_findings_path = reviewed_findings_path.resolve()
+
+
+def _load_saved_node_output(node_id: str) -> str:
+    return _manifest_runtime_python_node(
+        dedent(
+            f"""
+            import json
+            import os
+            from pathlib import Path
+
+            from agentflow.audit.intake import load_manifest
+
+            manifest = load_manifest(resolved_manifest_path)
+            package_dir = Path(manifest.run.artifacts_dir).parent
+            runs_dir = package_dir / "runs"
+            explicit_run_id = os.environ.get({SAVED_POC_VERIFY_RUN_ID_ENV!r}, "").strip()
+
+            candidate_paths: list[Path] = []
+            if explicit_run_id:
+                candidate_paths.append(runs_dir / explicit_run_id / "run.json")
+            else:
+                current_run_id_path = runs_dir / "current-run-id"
+                if current_run_id_path.exists():
+                    current_run_id = current_run_id_path.read_text(encoding="utf-8").strip()
+                    if current_run_id:
+                        candidate_paths.append(runs_dir / current_run_id / "run.json")
+                candidate_paths.extend(sorted(runs_dir.glob("*/run.json"), reverse=True))
+
+            seen: set[Path] = set()
+            for run_path in candidate_paths:
+                if run_path in seen or not run_path.exists():
+                    continue
+                seen.add(run_path)
+                run = json.loads(run_path.read_text(encoding="utf-8"))
+                node = run.get("nodes", {{}}).get({node_id!r})
+                if not isinstance(node, dict):
+                    continue
+                output = node.get("output")
+                if output is None:
+                    continue
+                if isinstance(output, str) and not output.strip():
+                    continue
+                if isinstance(output, str):
+                    print(output)
+                else:
+                    print(json.dumps(output, indent=2))
+                raise SystemExit(0)
+
+            raise SystemExit("no saved output found for node {node_id}")
+            """
+        ).strip()
+    )
 
 
 with Graph(
@@ -97,6 +150,10 @@ with Graph(
             ).strip()
         ),
     )
+    load_saved_poc_verify = python_node(
+        task_id="load_saved_poc_verify",
+        code=_load_saved_node_output("poc_verify"),
+    )
     report_finalize_build = python_node(
         task_id="report_finalize_build",
         code=_manifest_runtime_python_node(
@@ -137,6 +194,46 @@ with Graph(
             """
         ),
     )
+    package_readme_build = python_node(
+        task_id="package_readme_build",
+        code=_manifest_runtime_python_node(
+            """
+            import json
+            from pathlib import Path
+
+            from agentflow.audit.intake import load_manifest
+            from agentflow.audit.models import FindingRecord, ReportManifest
+            from agentflow.audit.reporting import extract_json_document, write_package_readme
+
+            manifest = load_manifest(resolved_manifest_path)
+            report_dir = Path(manifest.run.artifacts_dir) / "report"
+            package_dir = Path(manifest.run.artifacts_dir).parent
+            report_manifest = ReportManifest.model_validate_json(
+                (report_dir / "report_manifest.json").read_text(encoding="utf-8")
+            )
+            findings = [
+                FindingRecord.model_validate(item)
+                for item in json.loads((report_dir / "findings.json").read_text(encoding="utf-8"))
+            ]
+            poc_verify_payload = {{ nodes.load_saved_poc_verify.output | tojson }}
+            poc_verify = (
+                extract_json_document(poc_verify_payload)
+                if isinstance(poc_verify_payload, str)
+                else poc_verify_payload
+            )
+            if not isinstance(poc_verify, dict):
+                raise ValueError("poc_verify output must decode to a JSON object")
+            write_package_readme(
+                package_dir,
+                manifest,
+                report_manifest,
+                findings,
+                verification=poc_verify,
+            )
+            print((package_dir / "README.md").read_text(encoding="utf-8"))
+            """
+        ),
+    )
     publish_artifacts = python_node(
         task_id="publish_artifacts",
         code=dedent(
@@ -149,6 +246,7 @@ with Graph(
                 json.dumps(
                     {
                         "artifacts_root": "run.artifacts_dir",
+                        "readme": "README.md",
                         "report_dir": report_dir.as_posix(),
                         "report": (report_dir / "AUDIT_REPORT.md").as_posix(),
                         "findings": (report_dir / "findings.json").as_posix(),
@@ -161,7 +259,11 @@ with Graph(
         ),
     )
 
-    intake_target >> materialize_target >> load_saved_report_review >> report_finalize_build >> publish_artifacts
+    intake_target >> materialize_target
+    materialize_target >> load_saved_report_review >> report_finalize_build
+    materialize_target >> load_saved_poc_verify
+    [report_finalize_build, load_saved_poc_verify] >> package_readme_build
+    package_readme_build >> publish_artifacts
 
 
 print(graph.to_json())
