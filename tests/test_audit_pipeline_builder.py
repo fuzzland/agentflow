@@ -361,6 +361,7 @@ def test_finalize_from_saved_review_example_includes_package_readme_stage(tmp_pa
     assert "package_readme_build" in node_ids
     publish_node = next(node for node in payload["nodes"] if node["id"] == "publish_artifacts")
     assert '"readme": "README.md"' in publish_node["prompt"]
+    assert "\nprint(\n" in publish_node["prompt"]
     load_saved_poc_verify = next(node for node in payload["nodes"] if node["id"] == "load_saved_poc_verify")
     assert "from agentflow.audit.intake import load_manifest" in load_saved_poc_verify["prompt"]
     assert "manifest = load_manifest(resolved_manifest_path)" in load_saved_poc_verify["prompt"]
