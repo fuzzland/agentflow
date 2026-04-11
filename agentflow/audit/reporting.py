@@ -20,6 +20,7 @@ _FREE_TEXT_PATH_PATTERNS = (
 )
 _TRAILING_PATH_PUNCTUATION = ".,:;)]}"
 _FOUNDRY_SUITE_PATTERNS = (
+    re.compile(r"(\d+)\s+tests?\s+passed,\s*(\d+)\s+failed,\s*(\d+)\s+skipped", re.IGNORECASE),
     re.compile(r"(\d+)\s+passed[;,]\s*(\d+)\s+failed[;,]\s*(\d+)\s+skipped", re.IGNORECASE),
     re.compile(r"(\d+)\s+passed,\s*(\d+)\s+failed,\s*(\d+)\s+skipped", re.IGNORECASE),
 )
@@ -256,12 +257,15 @@ def _validation_overview(findings: list[FindingRecord]) -> str:
 
 
 def _extract_foundry_suite_summary(stdout_text: str) -> str | None:
+    last_match: tuple[int, tuple[str, str, str]] | None = None
     for pattern in _FOUNDRY_SUITE_PATTERNS:
-        match = pattern.search(stdout_text)
-        if match:
-            passed, failed, skipped = match.groups()
-            return f"{passed} passed, {failed} failed, {skipped} skipped"
-    return None
+        for match in pattern.finditer(stdout_text):
+            if last_match is None or match.start() > last_match[0]:
+                last_match = (match.start(), match.groups())
+    if last_match is None:
+        return None
+    _, (passed, failed, skipped) = last_match
+    return f"{passed} passed, {failed} failed, {skipped} skipped"
 
 
 def render_package_readme(

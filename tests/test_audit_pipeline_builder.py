@@ -309,6 +309,63 @@ def test_public_example_prints_contract_audit_graph(tmp_path: Path) -> None:
     assert payload["name"] == "contract-audit-example"
 
 
+def test_finalize_from_saved_review_example_includes_package_readme_stage(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": str(tmp_path / "artifacts"),
+                    "parallel_shards": 6,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": True,
+                    "max_poc_candidates": 5,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    reviewed_findings = tmp_path / "reviewed.json"
+    reviewed_findings.write_text("[]", encoding="utf-8")
+    repo_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env[AUDIT_MANIFEST_ENV] = str(manifest_path)
+    env["AGENTFLOW_CONTRACT_AUDIT_REVIEWED_FINDINGS_PATH"] = str(reviewed_findings)
+
+    completed = subprocess.run(
+        [sys.executable, str(repo_root / "examples" / "contract_audit_finalize_from_saved_review.py")],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+        env=env,
+    )
+
+    payload = json.loads(completed.stdout)
+    node_ids = [node["id"] for node in payload["nodes"]]
+
+    assert payload["name"] == "contract-audit-finalize-from-saved-review"
+    assert "package_readme_build" in node_ids
+    publish_node = next(node for node in payload["nodes"] if node["id"] == "publish_artifacts")
+    assert '"readme": "README.md"' in publish_node["prompt"]
+    load_saved_poc_verify = next(node for node in payload["nodes"] if node["id"] == "load_saved_poc_verify")
+    assert "from agentflow.audit.intake import load_manifest" in load_saved_poc_verify["prompt"]
+    assert "manifest = load_manifest(resolved_manifest_path)" in load_saved_poc_verify["prompt"]
+
+
 def test_public_example_resolves_repo_root_working_dir_for_python_utility_nodes() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     pipeline_path = repo_root / "examples" / "contract_audit.py"
