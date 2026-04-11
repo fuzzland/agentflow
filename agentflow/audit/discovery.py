@@ -55,6 +55,10 @@ def _deduplicate_round_findings(findings: list[FindingRecord]) -> dict[str, Find
     return deduped
 
 
+def _is_merged_finding(finding: FindingRecord) -> bool:
+    return finding.review.disposition == "merged"
+
+
 def load_discovery_state(path: str | Path) -> DiscoveryState:
     state_path = Path(path)
     if not state_path.exists():
@@ -90,6 +94,10 @@ def apply_discovery_round(
         existing_accepted = accepted.get(fingerprint)
         existing_rejected = rejected.get(fingerprint)
         existing = existing_accepted or existing_rejected
+
+        if _is_merged_finding(finding):
+            accepted.pop(fingerprint, None)
+            continue
 
         if finding.validation_status == "rejected":
             accepted.pop(fingerprint, None)
@@ -143,7 +151,7 @@ def customer_visible_findings(state: DiscoveryState) -> list[FindingRecord]:
     visible = [
         finding
         for finding in state.accepted_findings.values()
-        if finding.validation_status != "rejected"
+        if finding.validation_status != "rejected" and not _is_merged_finding(finding)
     ]
     return sorted(visible, key=lambda finding: finding.id)
 
@@ -159,7 +167,7 @@ def discovery_prompt_payload(state: DiscoveryState) -> dict[str, object]:
                 "title": finding.title,
                 "validation_status": finding.validation_status,
             }
-            for finding in sorted(state.accepted_findings.values(), key=lambda item: item.id)
+            for finding in customer_visible_findings(state)
         ],
         "rejected_findings": [
             {

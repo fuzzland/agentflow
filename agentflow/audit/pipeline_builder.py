@@ -169,8 +169,18 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
                 import re
                 from pathlib import Path
 
-                prepared = json.loads(\"\"\"{{ nodes.prepare_foundry_workspace.output }}\"\"\")
-                discovery_state = json.loads(\"\"\"{{ nodes.load_discovery_state.output }}\"\"\")
+                prepared_payload = {{ nodes.prepare_foundry_workspace.output | tojson }}
+                prepared = (
+                    json.loads(prepared_payload)
+                    if isinstance(prepared_payload, str)
+                    else prepared_payload
+                )
+                discovery_state_payload = {{ nodes.load_discovery_state.output | tojson }}
+                discovery_state = (
+                    json.loads(discovery_state_payload)
+                    if isinstance(discovery_state_payload, str)
+                    else discovery_state_payload
+                )
                 workspace_dir = Path(prepared["workspace_dir"])
                 src_root = workspace_dir / "src"
                 out_root = workspace_dir / "out"
@@ -378,7 +388,10 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
 
                 manifest = load_manifest(resolved_manifest_path)
                 state_path = Path(manifest.run.artifacts_dir) / "workspace" / "{_DISCOVERY_STATE_FILENAME}"
-                findings = findings_from_text(\"\"\"{{{{ nodes.evidence_gate.output }}}}\"\"\")
+                evidence_gate_output = {{{{ nodes.evidence_gate.output | tojson }}}}
+                if not isinstance(evidence_gate_output, str):
+                    evidence_gate_output = json.dumps(evidence_gate_output)
+                findings = findings_from_text(evidence_gate_output)
                 state, decision = advance_discovery_state(
                     state_path,
                     findings,
@@ -455,9 +468,24 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
 
                 from agentflow.audit.reporting import extract_json_document
 
-                prepared = json.loads(\"\"\"{{ nodes.prepare_foundry_workspace.output }}\"\"\")
-                findings = extract_json_document(\"\"\"{{ nodes.discovery_finalize.output }}\"\"\")
-                authored = extract_json_document(\"\"\"{{ nodes.poc_author.output }}\"\"\")
+                prepared_payload = {{ nodes.prepare_foundry_workspace.output | tojson }}
+                prepared = (
+                    json.loads(prepared_payload)
+                    if isinstance(prepared_payload, str)
+                    else prepared_payload
+                )
+                findings_payload = {{ nodes.discovery_finalize.output | tojson }}
+                findings = (
+                    extract_json_document(findings_payload)
+                    if isinstance(findings_payload, str)
+                    else findings_payload
+                )
+                authored_payload = {{ nodes.poc_author.output | tojson }}
+                authored = (
+                    extract_json_document(authored_payload)
+                    if isinstance(authored_payload, str)
+                    else authored_payload
+                )
                 workspace_dir = Path(prepared["workspace_dir"])
                 authored = authored if isinstance(authored, list) else []
                 findings = findings if isinstance(findings, list) else []
@@ -553,10 +581,23 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
                 from agentflow.audit.reporting import extract_json_document, write_report_bundle
 
                 manifest = load_manifest(resolved_manifest_path)
-                materialized = json.loads(\"\"\"{{ nodes.materialize_target.output }}\"\"\")
+                materialized_payload = {{ nodes.materialize_target.output | tojson }}
+                materialized = (
+                    json.loads(materialized_payload)
+                    if isinstance(materialized_payload, str)
+                    else materialized_payload
+                )
+                final_adjudication_payload = {{ nodes.final_adjudication.output | tojson }}
+                final_adjudication = (
+                    extract_json_document(final_adjudication_payload)
+                    if isinstance(final_adjudication_payload, str)
+                    else final_adjudication_payload
+                )
+                if not isinstance(final_adjudication, list):
+                    raise ValueError("final_adjudication output must decode to a JSON list")
                 findings = [
                     FindingRecord.model_validate(item)
-                    for item in extract_json_document(\"\"\"{{ nodes.final_adjudication.output }}\"\"\")
+                    for item in final_adjudication
                 ]
                 report_manifest = build_report_manifest(
                     manifest,
@@ -587,6 +628,7 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
             extra_args=CODEX_BYPASS_EXTRA_ARGS,
             retries=_AUDIT_CODEX_RETRIES,
             retry_backoff_seconds=_AUDIT_CODEX_RETRY_BACKOFF_SECONDS,
+            target={"kind": "local", "cwd": str(poc_workspace_dir)},
         )
         report_finalize_build = python_node(
             task_id="report_finalize_build",
@@ -600,10 +642,23 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
                 from agentflow.audit.reporting import extract_json_document, write_report_bundle
 
                 manifest = load_manifest(resolved_manifest_path)
-                materialized = json.loads(\"\"\"{{ nodes.materialize_target.output }}\"\"\")
+                materialized_payload = {{ nodes.materialize_target.output | tojson }}
+                materialized = (
+                    json.loads(materialized_payload)
+                    if isinstance(materialized_payload, str)
+                    else materialized_payload
+                )
+                report_review_payload = {{ nodes.report_review.output | tojson }}
+                report_review = (
+                    extract_json_document(report_review_payload)
+                    if isinstance(report_review_payload, str)
+                    else report_review_payload
+                )
+                if not isinstance(report_review, list):
+                    raise ValueError("report_review output must decode to a JSON list")
                 findings = [
                     FindingRecord.model_validate(item)
-                    for item in extract_json_document(\"\"\"{{ nodes.report_review.output }}\"\"\")
+                    for item in report_review
                 ]
                 report_manifest = build_report_manifest(
                     manifest,
