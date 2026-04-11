@@ -1,0 +1,167 @@
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+from textwrap import dedent
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from agentflow import Graph, python_node
+from agentflow.audit.intake import load_manifest
+from agentflow.audit.pipeline_builder import AUDIT_MANIFEST_ENV, _manifest_runtime_python_node
+
+
+REVIEWED_FINDINGS_ENV = "AGENTFLOW_CONTRACT_AUDIT_REVIEWED_FINDINGS_PATH"
+
+
+manifest_path = os.environ.get(AUDIT_MANIFEST_ENV)
+if not manifest_path:
+    sys.stderr.write(
+        f"Set {AUDIT_MANIFEST_ENV} to the manifest JSON path before running this example.\n"
+    )
+    raise SystemExit(1)
+
+resolved_manifest_path = Path(manifest_path).expanduser()
+if not resolved_manifest_path.is_absolute():
+    resolved_manifest_path = (REPO_ROOT / resolved_manifest_path).resolve()
+else:
+    resolved_manifest_path = resolved_manifest_path.resolve()
+
+manifest = load_manifest(resolved_manifest_path)
+default_reviewed_findings_path = Path(manifest.run.artifacts_dir) / "workspace" / "report_review_final.json"
+reviewed_findings_path = Path(
+    os.environ.get(REVIEWED_FINDINGS_ENV, str(default_reviewed_findings_path))
+).expanduser()
+if not reviewed_findings_path.is_absolute():
+    reviewed_findings_path = (REPO_ROOT / reviewed_findings_path).resolve()
+else:
+    reviewed_findings_path = reviewed_findings_path.resolve()
+
+
+with Graph(
+    "contract-audit-finalize-from-saved-review",
+    working_dir=str(REPO_ROOT),
+    concurrency=1,
+) as graph:
+    intake_target = python_node(
+        task_id="intake_target",
+        code=_manifest_runtime_python_node(
+            """
+            from agentflow.audit.intake import emit_normalized_manifest
+
+            emit_normalized_manifest(resolved_manifest_path)
+            """
+        ),
+    )
+    materialize_target = python_node(
+        task_id="materialize_target",
+        code=_manifest_runtime_python_node(
+            """
+            import json
+            from pathlib import Path
+
+            from agentflow.audit.intake import load_manifest
+            from agentflow.audit.materialize import materialize_source
+
+            manifest = load_manifest(resolved_manifest_path)
+            materialized = materialize_source(manifest, Path(manifest.run.artifacts_dir))
+            print(
+                json.dumps(
+                    {
+                        "snapshot_dir": str(materialized.snapshot_dir),
+                        "source_identifier": materialized.source_identifier,
+                        "source_mode": materialized.source_mode,
+                        "source_inventory": materialized.source_inventory,
+                    },
+                    indent=2,
+                )
+            )
+            """
+        ),
+    )
+    load_saved_report_review = python_node(
+        task_id="load_saved_report_review",
+        code=_manifest_runtime_python_node(
+            dedent(
+                f"""
+                from pathlib import Path
+
+                reviewed_findings_path = Path({str(reviewed_findings_path)!r})
+                if not reviewed_findings_path.exists():
+                    raise SystemExit(f"reviewed findings file not found: {{reviewed_findings_path}}")
+                print(reviewed_findings_path.read_text(encoding="utf-8"))
+                """
+            ).strip()
+        ),
+    )
+    report_finalize_build = python_node(
+        task_id="report_finalize_build",
+        code=_manifest_runtime_python_node(
+            """
+            import json
+            from pathlib import Path
+
+            from agentflow.audit.intake import build_report_manifest, load_manifest
+            from agentflow.audit.models import FindingRecord
+            from agentflow.audit.reporting import extract_json_document, write_report_bundle
+
+            manifest = load_manifest(resolved_manifest_path)
+            materialized_payload = {{ nodes.materialize_target.output | tojson }}
+            materialized = (
+                json.loads(materialized_payload)
+                if isinstance(materialized_payload, str)
+                else materialized_payload
+            )
+            report_review_payload = {{ nodes.load_saved_report_review.output | tojson }}
+            report_review = (
+                extract_json_document(report_review_payload)
+                if isinstance(report_review_payload, str)
+                else report_review_payload
+            )
+            if not isinstance(report_review, list):
+                raise ValueError("report_review output must decode to a JSON list")
+            findings = [
+                FindingRecord.model_validate(item)
+                for item in report_review
+            ]
+            report_manifest = build_report_manifest(
+                manifest,
+                source_identifier=materialized["source_identifier"],
+            )
+            report_dir = Path(manifest.run.artifacts_dir) / "report"
+            write_report_bundle(report_dir, report_manifest, findings)
+            print((report_dir / "AUDIT_REPORT.md").read_text(encoding="utf-8"))
+            """
+        ),
+    )
+    publish_artifacts = python_node(
+        task_id="publish_artifacts",
+        code=dedent(
+            """
+            import json
+            from pathlib import Path
+
+            report_dir = Path("report")
+            print(
+                json.dumps(
+                    {
+                        "artifacts_root": "run.artifacts_dir",
+                        "report_dir": report_dir.as_posix(),
+                        "report": (report_dir / "AUDIT_REPORT.md").as_posix(),
+                        "findings": (report_dir / "findings.json").as_posix(),
+                        "summary": (report_dir / "audit_summary.json").as_posix(),
+                    },
+                    indent=2,
+                )
+            )
+            """
+        ),
+    )
+
+    intake_target >> materialize_target >> load_saved_report_review >> report_finalize_build >> publish_artifacts
+
+
+print(graph.to_json())

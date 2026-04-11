@@ -180,6 +180,82 @@ def test_evidence_gate_requires_structured_findings_json_output(tmp_path: Path) 
     assert "every finding that survives to the final report must have a Foundry PoC" in evidence_gate["prompt"]
 
 
+def test_novelty_gate_embeds_evidence_output_via_tojson(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": ".agentflow/audits/example-vault",
+                    "parallel_shards": 6,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": True,
+                    "max_poc_candidates": 5,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    graph = build_contract_audit_graph(str(manifest_path))
+    payload = graph.to_payload()
+    novelty_gate = next(node for node in payload["nodes"] if node["id"] == "novelty_gate")
+
+    assert 'evidence_gate_output = {{ nodes.evidence_gate.output | tojson }}' in novelty_gate["prompt"]
+
+
+def test_python_nodes_embed_structured_outputs_via_tojson(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": ".agentflow/audits/example-vault",
+                    "parallel_shards": 6,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": True,
+                    "max_poc_candidates": 5,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    spec = build_contract_audit_graph(str(manifest_path)).to_spec()
+
+    assert 'prepared_payload = {{ nodes.prepare_foundry_workspace.output | tojson }}' in spec.node_map["poc_verify"].prompt
+    assert 'findings_payload = {{ nodes.discovery_finalize.output | tojson }}' in spec.node_map["poc_verify"].prompt
+    assert 'authored_payload = {{ nodes.poc_author.output | tojson }}' in spec.node_map["poc_verify"].prompt
+    assert 'materialized_payload = {{ nodes.materialize_target.output | tojson }}' in spec.node_map["report_build"].prompt
+    assert 'final_adjudication_payload = {{ nodes.final_adjudication.output | tojson }}' in spec.node_map["report_build"].prompt
+    assert 'materialized_payload = {{ nodes.materialize_target.output | tojson }}' in spec.node_map["report_finalize_build"].prompt
+    assert 'report_review_payload = {{ nodes.report_review.output | tojson }}' in spec.node_map["report_finalize_build"].prompt
+
+
 def test_public_example_prints_contract_audit_graph(tmp_path: Path) -> None:
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(
@@ -426,6 +502,7 @@ def test_build_contract_audit_graph_threads_policy_and_locks_poc_author_cwd(tmp_
     spec = build_contract_audit_graph(str(manifest_path)).to_spec()
 
     assert spec.node_map["poc_author"].target.cwd == ".agentflow/audits/example-vault/workspace/foundry_project"
+    assert spec.node_map["report_review"].target.cwd == ".agentflow/audits/example-vault/workspace/foundry_project"
     assert "allow_source_confirmed_without_poc=False" in spec.node_map["evidence_gate"].prompt
     assert "max_poc_candidates=2" in spec.node_map["poc_author"].prompt
     assert "every non-rejected validated finding" in spec.node_map["poc_author"].prompt
@@ -435,11 +512,12 @@ def test_build_contract_audit_graph_threads_policy_and_locks_poc_author_cwd(tmp_
     assert "absolutely impossible in the real business scenario" in spec.node_map["report_review"].prompt
     assert "intentionally keeps slasher at zero" in spec.node_map["evidence_review"].prompt
     assert spec.node_map["novelty_gate"].on_failure_restart == ["load_discovery_state"]
-    assert 'findings_from_text("""{{ nodes.evidence_gate.output }}""")' in spec.node_map["novelty_gate"].prompt
+    assert 'evidence_gate_output = {{ nodes.evidence_gate.output | tojson }}' in spec.node_map["novelty_gate"].prompt
+    assert 'findings = findings_from_text(evidence_gate_output)' in spec.node_map["novelty_gate"].prompt
     assert "{{ nodes.discovery_finalize.output }}" in spec.node_map["poc_author"].prompt
     assert "{{ nodes.poc_author.output }}" in spec.node_map["final_adjudication"].prompt
     assert "{{ nodes.report_build.output }}" in spec.node_map["report_review"].prompt
-    assert "{{ nodes.report_review.output }}" in spec.node_map["report_finalize_build"].prompt
+    assert 'report_review_payload = {{ nodes.report_review.output | tojson }}' in spec.node_map["report_finalize_build"].prompt
 
 
 def test_poc_verify_tracks_authored_test_coverage(tmp_path: Path) -> None:
@@ -473,8 +551,8 @@ def test_poc_verify_tracks_authored_test_coverage(tmp_path: Path) -> None:
 
     spec = build_contract_audit_graph(str(manifest_path)).to_spec()
 
-    assert "{{ nodes.poc_author.output }}" in spec.node_map["poc_verify"].prompt
-    assert "{{ nodes.discovery_finalize.output }}" in spec.node_map["poc_verify"].prompt
+    assert 'authored_payload = {{ nodes.poc_author.output | tojson }}' in spec.node_map["poc_verify"].prompt
+    assert 'findings_payload = {{ nodes.discovery_finalize.output | tojson }}' in spec.node_map["poc_verify"].prompt
     assert "missing_mappings" in spec.node_map["poc_verify"].prompt
     assert "nonexistent_test_paths" in spec.node_map["poc_verify"].prompt
 
