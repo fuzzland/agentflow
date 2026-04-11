@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from agentflow.audit.discovery import DiscoveryState, apply_discovery_round, findings_from_text
+from agentflow.audit.discovery import (
+    DiscoveryState,
+    apply_discovery_round,
+    customer_visible_findings,
+    findings_from_text,
+)
 from agentflow.audit.models import ComponentRef, FindingRecord, PocRecord, ReviewRecord
 
 
@@ -9,6 +14,7 @@ def _finding(
     *,
     validation_status: str,
     finding_id: str | None = None,
+    disposition: str = "confirmed",
 ) -> FindingRecord:
     return FindingRecord(
         id=finding_id or fingerprint.upper(),
@@ -22,7 +28,7 @@ def _finding(
         root_cause=f"{fingerprint} root cause",
         attack_scenario=f"{fingerprint} impact",
         poc=PocRecord(eligible=True, status="passed" if validation_status == "poc_confirmed" else "not_attempted"),
-        review=ReviewRecord(disposition="confirmed", notes=""),
+        review=ReviewRecord(disposition=disposition, notes=""),
         dedup_fingerprint=fingerprint,
     )
 
@@ -89,3 +95,29 @@ Using the repo FindingRecord[] shape for this pass.
     findings = findings_from_text(text)
 
     assert [finding.id for finding in findings] == ["CAN-01"]
+
+
+def test_apply_discovery_round_does_not_count_merged_findings_as_progress():
+    state = DiscoveryState()
+
+    state, decision = apply_discovery_round(
+        state,
+        [_finding("fp-merged", validation_status="source_confirmed", disposition="merged")],
+    )
+
+    assert decision.new_fingerprints == []
+    assert state.consecutive_no_progress == 1
+    assert state.accepted_findings == {}
+
+
+def test_customer_visible_findings_excludes_merged_findings():
+    state = DiscoveryState(
+        accepted_findings={
+            "fp-keep": _finding("fp-keep", validation_status="source_confirmed"),
+            "fp-merged": _finding("fp-merged", validation_status="source_confirmed", disposition="merged"),
+        }
+    )
+
+    visible = customer_visible_findings(state)
+
+    assert [finding.dedup_fingerprint for finding in visible] == ["fp-keep"]
