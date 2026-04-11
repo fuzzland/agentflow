@@ -98,8 +98,7 @@ The exact manifest used for this engagement was:
   },
   "run": {
     "artifacts_dir": "/data/agentenv/agentflow-audit-reports/solv/cap-vault-reports/artifacts",
-    "parallel_shards": 6,
-    "estimated_execution_time": "~8h 20m"
+    "parallel_shards": 6
   },
   "policy": {
     "allow_source_confirmed_without_poc": true,
@@ -215,8 +214,7 @@ When auditing a new project, the input you prepare is a manifest JSON file. The 
   },
   "run": {
     "artifacts_dir": "/absolute/path/to/report-package/artifacts",
-    "parallel_shards": 6,
-    "estimated_execution_time": "~6h 30m"
+    "parallel_shards": 6
   },
   "policy": {
     "allow_source_confirmed_without_poc": true,

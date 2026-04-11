@@ -233,7 +233,11 @@ with Graph(
 
             from agentflow.audit.intake import load_manifest
             from agentflow.audit.models import FindingRecord, ReportManifest
-            from agentflow.audit.reporting import extract_json_document, write_package_readme
+            from agentflow.audit.reporting import (
+                extract_json_document,
+                infer_package_execution_time,
+                write_package_readme,
+            )
 
             manifest = load_manifest(resolved_manifest_path)
             report_dir = Path(manifest.run.artifacts_dir) / "report"
@@ -253,12 +257,14 @@ with Graph(
             )
             if not isinstance(poc_verify, dict):
                 raise ValueError("saved poc_verify output must decode to a JSON object")
+            execution_time = infer_package_execution_time(package_dir)
             write_package_readme(
                 package_dir,
                 manifest,
                 report_manifest,
                 findings,
                 verification=poc_verify,
+                execution_time=execution_time,
             )
             print((package_dir / "README.md").read_text(encoding="utf-8"))
             """

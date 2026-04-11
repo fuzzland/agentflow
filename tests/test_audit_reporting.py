@@ -20,6 +20,7 @@ import json
 
 from agentflow.audit.reporting import (
     extract_json_document,
+    infer_package_execution_time,
     public_findings_projection,
     render_audit_report,
     render_package_readme,
@@ -334,7 +335,6 @@ def test_render_package_readme_includes_customer_summary_verification_and_delive
         run=RunConfig(
             artifacts_dir=str(package_dir / "artifacts"),
             parallel_shards=6,
-            estimated_execution_time="~8h 20m",
         ),
         policy=PolicyConfig(),
     )
@@ -381,6 +381,7 @@ def test_render_package_readme_includes_customer_summary_verification_and_delive
         report_manifest,
         findings,
         verification=verification,
+        execution_time="~8h 20m",
     )
 
     assert "# TokenVault Audit Package" in readme
@@ -389,7 +390,7 @@ def test_render_package_readme_includes_customer_summary_verification_and_delive
     assert "## Verification" in readme
     assert "## Deliverables" in readme
     assert "## Key Findings" in readme
-    assert "| Estimated Execution Time | `~8h 20m` |" in readme
+    assert "| Execution Time | `~8h 20m` |" in readme
     assert "- Source directory: `../source`" in readme
     assert "cd artifacts/workspace/foundry_project" in readme
     assert "forge build" in readme
@@ -489,7 +490,7 @@ def test_write_package_readme_removes_legacy_execution_summary(tmp_path):
     assert not (package_dir / "execution_summary.md").exists()
 
 
-def test_render_package_readme_for_github_source_omits_estimated_time_when_not_configured(tmp_path):
+def test_render_package_readme_for_github_source_omits_execution_time_when_not_provided(tmp_path):
     package_dir = tmp_path / "protocol-reports"
     package_dir.mkdir()
     manifest = ContractAuditManifest(
@@ -515,4 +516,51 @@ def test_render_package_readme_for_github_source_omits_estimated_time_when_not_c
 
     assert "- Upstream repository: `https://github.com/example/protocol`" in readme
     assert "- Fetched revision: `0123456789abcdef0123456789abcdef01234567`" in readme
-    assert "Estimated Execution Time" not in readme
+    assert "Execution Time" not in readme
+
+
+def test_infer_package_execution_time_uses_current_run_file(tmp_path):
+    package_dir = tmp_path / "cap-vault-reports"
+    runs_dir = package_dir / "runs"
+    run_dir = runs_dir / "run-123"
+    run_dir.mkdir(parents=True)
+    (runs_dir / "current-run-id").write_text("run-123\n", encoding="utf-8")
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "pipeline": {"name": "contract-audit-example"},
+                "started_at": "2026-04-08T12:00:00+00:00",
+                "finished_at": "2026-04-08T20:20:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    execution_time = infer_package_execution_time(package_dir)
+
+    assert execution_time == "8h 20m"
+
+
+def test_infer_package_execution_time_returns_none_when_package_has_multiple_runs(tmp_path):
+    package_dir = tmp_path / "cap-vault-reports"
+    runs_dir = package_dir / "runs"
+    first_run_dir = runs_dir / "run-123"
+    second_run_dir = runs_dir / "run-456"
+    first_run_dir.mkdir(parents=True)
+    second_run_dir.mkdir(parents=True)
+    (runs_dir / "current-run-id").write_text("run-123\n", encoding="utf-8")
+    for run_dir in (first_run_dir, second_run_dir):
+        (run_dir / "run.json").write_text(
+            json.dumps(
+                {
+                    "pipeline": {"name": "contract-audit-example"},
+                    "started_at": "2026-04-08T12:00:00+00:00",
+                    "finished_at": "2026-04-08T20:20:00+00:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    execution_time = infer_package_execution_time(package_dir)
+
+    assert execution_time is None
