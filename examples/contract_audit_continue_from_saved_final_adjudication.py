@@ -278,19 +278,20 @@ with Graph(
             from pathlib import Path
 
             report_dir = Path("report")
-            print(
-                json.dumps(
-                    {
-                        "artifacts_root": "run.artifacts_dir",
-                        "readme": "README.md",
-                        "report_dir": report_dir.as_posix(),
-                        "report": (report_dir / "AUDIT_REPORT.md").as_posix(),
-                        "findings": (report_dir / "findings.json").as_posix(),
-                        "summary": (report_dir / "audit_summary.json").as_posix(),
-                    },
-                    indent=2,
+                print(
+                    json.dumps(
+                        {
+                            "package_root": ".",
+                            "artifacts_root": "artifacts",
+                            "readme": "README.md",
+                            "audit_report": "AUDIT_REPORT.md",
+                            "report_dir": ("artifacts" / report_dir).as_posix(),
+                            "findings": ("artifacts" / report_dir / "findings.json").as_posix(),
+                            "summary": ("artifacts" / report_dir / "audit_summary.json").as_posix(),
+                        },
+                        indent=2,
+                    )
                 )
-            )
             """
         ),
     )

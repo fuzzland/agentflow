@@ -40,9 +40,9 @@ flowchart LR
 | `poc_author` | Write Foundry PoC tests for the best PoC-eligible findings. | `test/security/*.t.sol` |
 | `poc_verify` | Run `forge build` and `forge test -vvv`. | Verification result JSON |
 | `final_adjudication` | Combine validated findings with PoC results. | Final canonical findings JSON |
-| `report_build` | Render the draft report bundle. | Draft `AUDIT_REPORT.md`, `findings.json`, `audit_summary.json`, `report_manifest.json` |
+| `report_build` | Render the draft report bundle. | Draft root `AUDIT_REPORT.md` plus report bundle JSON files |
 | `report_review` | Perform delivery-level review, reject impossible findings, and merge duplicates. | Final reviewed findings JSON |
-| `report_finalize_build` | Re-render the final report bundle after review. | Final `AUDIT_REPORT.md`, `findings.json`, `audit_summary.json`, `report_manifest.json` |
+| `report_finalize_build` | Re-render the final report bundle after review. | Final root `AUDIT_REPORT.md` plus report bundle JSON files |
 | `package_readme_build` | Render the customer-facing package landing page. | Root `README.md` |
 | `publish_artifacts` | Emit the final artifact paths for downstream use. | Artifact index JSON |
 
@@ -163,8 +163,8 @@ The Cap Vault engagement produced these deliverables under `/data/agentenv/agent
 | Path | Purpose |
 | --- | --- |
 | `README.md` | Customer-facing landing page summarizing scope, verification, deliverables, and key findings. |
+| `AUDIT_REPORT.md` | Root-level human-readable audit report for delivery. |
 | `contract_audit_manifest.json` | The exact manifest used for the run. |
-| `artifacts/report/AUDIT_REPORT.md` | Human-readable audit report for delivery. |
 | `artifacts/report/findings.json` | Canonical machine-readable finding records. |
 | `artifacts/report/audit_summary.json` | Summary JSON with counts and engagement metadata. |
 | `artifacts/report/report_manifest.json` | Report-safe manifest used for rendering. |
@@ -297,15 +297,19 @@ PATH="$HOME/.foundry/bin:$PATH" \
 A typical output layout looks like this:
 
 ```text
-<artifacts_dir>/
-  workspace/
-    source_snapshot/
-    foundry_project/
-  report/
-    AUDIT_REPORT.md
-    findings.json
-    audit_summary.json
-    report_manifest.json
+<report-package>/
+  README.md
+  AUDIT_REPORT.md
+  contract_audit_manifest.json
+  artifacts/
+    workspace/
+      source_snapshot/
+      foundry_project/
+    report/
+      AUDIT_REPORT.md
+      findings.json
+      audit_summary.json
+      report_manifest.json
 ```
 
 For `github + commit` intake mode, AgentFlow may also create a clone staging directory before materializing the final source snapshot. For `local` intake mode, the source tree is materialized directly into `workspace/source_snapshot/`.
@@ -313,7 +317,7 @@ For `github + commit` intake mode, AgentFlow may also create a clone staging dir
 ## Safety Notes
 
 - The rendered report uses `target.report.audit_scope`, not an absolute local filesystem path, for scope text.
-- `AUDIT_REPORT.md` is intended to stay report-safe even when the run writes into a private local reports repository.
+- Root `AUDIT_REPORT.md` is intended to stay report-safe even when the run writes into a private local reports repository.
 - Local debug paths, scratch files, and other environment-specific notes should stay outside the committed report bundle.
 
 ## Current Scope
