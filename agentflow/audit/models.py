@@ -86,6 +86,7 @@ class RunConfig(BaseModel):
 
     artifacts_dir: str
     parallel_shards: int = Field(default=6, ge=1, le=32)
+    estimated_execution_time: str | None = None
 
     @field_validator("artifacts_dir")
     @classmethod
@@ -102,6 +103,14 @@ class RunConfig(BaseModel):
         if any(part == ".." for part in posix_path.parts) or any(part == ".." for part in windows_path.parts):
             raise ValueError("artifacts_dir must be a non-empty path")
         return normalized
+
+    @field_validator("estimated_execution_time")
+    @classmethod
+    def _normalize_estimated_execution_time(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class PolicyConfig(BaseModel):

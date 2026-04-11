@@ -18,6 +18,7 @@ from agentflow.audit.models import (
     VerificationCommandResult,
     VerificationRecord,
 )
+from agentflow.audit.reporting import render_package_readme, write_package_readme
 
 __all__ = [
     "ChainContext",
@@ -42,4 +43,6 @@ __all__ = [
     "build_report_manifest",
     "emit_normalized_manifest",
     "load_manifest",
+    "render_package_readme",
+    "write_package_readme",
 ]

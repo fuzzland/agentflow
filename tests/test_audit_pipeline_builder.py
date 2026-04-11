@@ -51,6 +51,7 @@ def test_build_contract_audit_graph_contains_expected_nodes(tmp_path: Path) -> N
         "report_build",
         "report_review",
         "report_finalize_build",
+        "package_readme_build",
         "publish_artifacts",
     ]
 
@@ -254,6 +255,8 @@ def test_python_nodes_embed_structured_outputs_via_tojson(tmp_path: Path) -> Non
     assert 'final_adjudication_payload = {{ nodes.final_adjudication.output | tojson }}' in spec.node_map["report_build"].prompt
     assert 'materialized_payload = {{ nodes.materialize_target.output | tojson }}' in spec.node_map["report_finalize_build"].prompt
     assert 'report_review_payload = {{ nodes.report_review.output | tojson }}' in spec.node_map["report_finalize_build"].prompt
+    assert 'poc_verify_payload = {{ nodes.poc_verify.output | tojson }}' in spec.node_map["package_readme_build"].prompt
+    assert '"readme": "README.md"' in spec.node_map["publish_artifacts"].prompt
 
 
 def test_public_example_prints_contract_audit_graph(tmp_path: Path) -> None:
@@ -375,6 +378,7 @@ def test_publish_artifacts_summary_uses_report_relative_paths() -> None:
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout) == {
         "artifacts_root": "run.artifacts_dir",
+        "readme": "README.md",
         "report_dir": "report",
         "report": "report/AUDIT_REPORT.md",
         "findings": "report/findings.json",

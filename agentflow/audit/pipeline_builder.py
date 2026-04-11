@@ -670,6 +670,46 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
                 """
             ),
         )
+        package_readme_build = python_node(
+            task_id="package_readme_build",
+            code=_manifest_runtime_python_node(
+                """
+                import json
+                from pathlib import Path
+
+                from agentflow.audit.intake import load_manifest
+                from agentflow.audit.models import FindingRecord, ReportManifest
+                from agentflow.audit.reporting import extract_json_document, write_package_readme
+
+                manifest = load_manifest(resolved_manifest_path)
+                report_dir = Path(manifest.run.artifacts_dir) / "report"
+                package_dir = Path(manifest.run.artifacts_dir).parent
+                report_manifest = ReportManifest.model_validate_json(
+                    (report_dir / "report_manifest.json").read_text(encoding="utf-8")
+                )
+                findings = [
+                    FindingRecord.model_validate(item)
+                    for item in json.loads((report_dir / "findings.json").read_text(encoding="utf-8"))
+                ]
+                poc_verify_payload = {{ nodes.poc_verify.output | tojson }}
+                poc_verify = (
+                    extract_json_document(poc_verify_payload)
+                    if isinstance(poc_verify_payload, str)
+                    else poc_verify_payload
+                )
+                if not isinstance(poc_verify, dict):
+                    raise ValueError("poc_verify output must decode to a JSON object")
+                write_package_readme(
+                    package_dir,
+                    manifest,
+                    report_manifest,
+                    findings,
+                    verification=poc_verify,
+                )
+                print((package_dir / "README.md").read_text(encoding="utf-8"))
+                """
+            ),
+        )
         publish_artifacts = python_node(
             task_id="publish_artifacts",
             code=dedent(
@@ -682,6 +722,7 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
                     json.dumps(
                         {
                             "artifacts_root": "run.artifacts_dir",
+                            "readme": "README.md",
                             "report_dir": report_dir.as_posix(),
                             "report": (report_dir / "AUDIT_REPORT.md").as_posix(),
                             "findings": (report_dir / "findings.json").as_posix(),
@@ -697,6 +738,6 @@ def build_contract_audit_graph(manifest_path: str) -> Graph:
         intake_target >> materialize_target >> prepare_foundry_workspace >> load_discovery_state >> surface_map >> audit_shard >> finding_prepare >> finding_reduce
         finding_reduce >> evidence_review >> evidence_gate >> novelty_gate >> discovery_finalize >> poc_author >> poc_verify >> final_adjudication
         novelty_gate.on_failure >> load_discovery_state
-        final_adjudication >> report_build >> report_review >> report_finalize_build >> publish_artifacts
+        final_adjudication >> report_build >> report_review >> report_finalize_build >> package_readme_build >> publish_artifacts
 
     return graph
