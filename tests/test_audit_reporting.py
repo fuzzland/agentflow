@@ -1,9 +1,31 @@
 from __future__ import annotations
 
-from agentflow.audit.models import ComponentRef, EvidenceRef, FindingRecord, PocRecord, ReportManifest, ReviewRecord
+from agentflow.audit.models import (
+    ChainContext,
+    ComponentRef,
+    ContractAuditManifest,
+    EvidenceRef,
+    FindingRecord,
+    GitHubSourceConfig,
+    LocalSourceConfig,
+    PocRecord,
+    PolicyConfig,
+    ReportManifest,
+    ReviewRecord,
+    RunConfig,
+    TargetConfig,
+    TargetReportConfig,
+)
 import json
 
-from agentflow.audit.reporting import extract_json_document, public_findings_projection, render_audit_report, write_report_bundle
+from agentflow.audit.reporting import (
+    extract_json_document,
+    public_findings_projection,
+    render_audit_report,
+    render_package_readme,
+    write_package_readme,
+    write_report_bundle,
+)
 
 
 def _finding(
@@ -291,3 +313,156 @@ def test_write_report_bundle_filters_rejected_findings_from_customer_outputs(tmp
     assert [item["id"] for item in public_findings] == ["F-010"]
     assert summary["total_findings"] == 1
     assert summary["validation_counts"]["rejected"] == 0
+
+
+def test_render_package_readme_includes_customer_summary_verification_and_deliverables(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    package_dir = tmp_path / "cap-vault-reports"
+    workspace_dir = package_dir / "artifacts" / "workspace" / "foundry_project"
+    workspace_dir.mkdir(parents=True)
+    manifest = ContractAuditManifest(
+        target=TargetConfig(
+            source=LocalSourceConfig(kind="local", local_path=source_dir),
+            report=TargetReportConfig(project_name="TokenVault", audit_scope="src/contracts/vault"),
+            chain_context=ChainContext(
+                chain="ethereum",
+                contract_address_url="https://etherscan.io/address/0x1234",
+                creation_tx_url="https://etherscan.io/tx/0xabcd",
+            ),
+        ),
+        run=RunConfig(
+            artifacts_dir=str(package_dir / "artifacts"),
+            parallel_shards=6,
+            estimated_execution_time="~8h 20m",
+        ),
+        policy=PolicyConfig(),
+    )
+    report_manifest = ReportManifest(
+        project_name="TokenVault",
+        audit_scope="src/contracts/vault",
+        source_mode="local snapshot",
+        source_identifier="snapshot:deadbeef",
+        chain="ethereum",
+        contract_address_url="https://etherscan.io/address/0x1234",
+        creation_tx_url="https://etherscan.io/tx/0xabcd",
+    )
+    findings = [
+        _finding(
+            "CAN-01",
+            severity="high",
+            validation_status="poc_confirmed",
+            component_file="src/contracts/Vault.sol",
+            poc_status="passed",
+            poc_test_path="test/security/VaultPoC.t.sol",
+            summary_text="Permissionless initialization lets the first caller seize bootstrap.",
+        ),
+        _finding(
+            "CAN-02",
+            severity="medium",
+            validation_status="poc_confirmed",
+            component_file="src/contracts/Vault.sol",
+            poc_status="passed",
+            poc_test_path="test/security/VaultPoC.t.sol",
+            summary_text="A second PoC-confirmed issue is present.",
+        ),
+    ]
+    verification = {
+        "workspace": str(workspace_dir),
+        "build": {"status": "passed", "command": "forge build", "exit_code": 0},
+        "test": {"status": "passed", "command": "forge test -vvv", "exit_code": 0},
+        "stdout": "Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 12.34ms (5.67ms CPU time)\n",
+        "stderr": "",
+    }
+
+    readme = render_package_readme(
+        package_dir,
+        manifest,
+        report_manifest,
+        findings,
+        verification=verification,
+    )
+
+    assert "# TokenVault Audit Package" in readme
+    assert "## Executive Summary" in readme
+    assert "## Scope" in readme
+    assert "## Verification" in readme
+    assert "## Deliverables" in readme
+    assert "## Key Findings" in readme
+    assert "| Estimated Execution Time | `~8h 20m` |" in readme
+    assert "- Source directory: `../source`" in readme
+    assert "cd artifacts/workspace/foundry_project" in readme
+    assert "forge build" in readme
+    assert "forge test -vvv" in readme
+    assert "- `forge build`: `passed` (exit `0`)" in readme
+    assert "- `forge test -vvv`: `passed` (exit `0`)" in readme
+    assert "- PoC suite: `2 passed, 0 failed, 0 skipped`" in readme
+    assert "`artifacts/workspace/foundry_project/test/security/VaultPoC.t.sol`" in readme
+    assert "`CAN-01` High: Permissionless initialization lets the first caller seize bootstrap." in readme
+    assert "execution_summary.md" not in readme
+
+
+def test_write_package_readme_removes_legacy_execution_summary(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    (package_dir / "execution_summary.md").write_text("legacy", encoding="utf-8")
+    manifest = ContractAuditManifest(
+        target=TargetConfig(
+            source=LocalSourceConfig(kind="local", local_path=source_dir),
+            report=TargetReportConfig(project_name="TokenVault", audit_scope="contracts"),
+        ),
+        run=RunConfig(artifacts_dir=str(package_dir / "artifacts"), parallel_shards=6),
+        policy=PolicyConfig(),
+    )
+    report_manifest = ReportManifest(
+        project_name="TokenVault",
+        audit_scope="contracts",
+        source_mode="local snapshot",
+        source_identifier="snapshot:deadbeef",
+    )
+    findings = [
+        _finding(
+            "CAN-01",
+            severity="high",
+            validation_status="poc_confirmed",
+            component_file="contracts/Vault.sol",
+            poc_status="passed",
+            poc_test_path="test/security/VaultPoC.t.sol",
+        )
+    ]
+
+    write_package_readme(package_dir, manifest, report_manifest, findings, verification=None)
+
+    assert (package_dir / "README.md").exists()
+    assert not (package_dir / "execution_summary.md").exists()
+
+
+def test_render_package_readme_for_github_source_omits_estimated_time_when_not_configured(tmp_path):
+    package_dir = tmp_path / "protocol-reports"
+    package_dir.mkdir()
+    manifest = ContractAuditManifest(
+        target=TargetConfig(
+            source=GitHubSourceConfig(
+                kind="github",
+                repo_url="https://github.com/example/protocol",
+                commit="0123456789abcdef0123456789abcdef01234567",
+            ),
+            report=TargetReportConfig(project_name="Protocol", audit_scope="src/protocol"),
+        ),
+        run=RunConfig(artifacts_dir=str(package_dir / "artifacts"), parallel_shards=6),
+        policy=PolicyConfig(),
+    )
+    report_manifest = ReportManifest(
+        project_name="Protocol",
+        audit_scope="src/protocol",
+        source_mode="github repo",
+        source_identifier="github:example/protocol@0123456",
+    )
+
+    readme = render_package_readme(package_dir, manifest, report_manifest, [])
+
+    assert "- Upstream repository: `https://github.com/example/protocol`" in readme
+    assert "- Fetched revision: `0123456789abcdef0123456789abcdef01234567`" in readme
+    assert "Estimated Execution Time" not in readme
