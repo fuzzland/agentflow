@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import os
 import re
@@ -268,6 +269,81 @@ def _extract_foundry_suite_summary(stdout_text: str) -> str | None:
     return f"{passed} passed, {failed} failed, {skipped} skipped"
 
 
+def _parse_iso8601(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    try:
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _format_execution_duration(total_seconds: int) -> str:
+    remaining = max(total_seconds, 0)
+    days, remaining = divmod(remaining, 86400)
+    hours, remaining = divmod(remaining, 3600)
+    minutes, seconds = divmod(remaining, 60)
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if seconds or not parts:
+        parts.append(f"{seconds}s")
+    if len(parts) > 2:
+        parts = parts[:2]
+    return " ".join(parts)
+
+
+def infer_package_execution_time(
+    package_dir: str | Path,
+    *,
+    now: datetime | None = None,
+) -> str | None:
+    package_root = Path(package_dir).expanduser().resolve()
+    runs_dir = package_root / "runs"
+    run_files = sorted(runs_dir.glob("*/run.json"))
+    if len(run_files) != 1:
+        return None
+    run_id_path = runs_dir / "current-run-id"
+    run_json_path: Path | None = None
+    if run_id_path.exists():
+        run_id = run_id_path.read_text(encoding="utf-8").strip()
+        if run_id:
+            candidate = runs_dir / run_id / "run.json"
+            if candidate.exists():
+                run_json_path = candidate
+    if run_json_path is None:
+        run_json_path = run_files[0]
+    if run_json_path is None or not run_json_path.exists():
+        return None
+    try:
+        payload = json.loads(run_json_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    pipeline = payload.get("pipeline")
+    pipeline_name = pipeline.get("name") if isinstance(pipeline, dict) else None
+    if pipeline_name != "contract-audit-example":
+        return None
+    started_at = _parse_iso8601(payload.get("started_at") or payload.get("created_at"))
+    finished_at = _parse_iso8601(payload.get("finished_at"))
+    if started_at is None:
+        return None
+    effective_end = finished_at or now or datetime.now(timezone.utc)
+    total_seconds = int(max((effective_end - started_at).total_seconds(), 0))
+    return _format_execution_duration(total_seconds)
+
+
 def render_package_readme(
     package_dir: str | Path,
     manifest: ContractAuditManifest,
@@ -275,6 +351,7 @@ def render_package_readme(
     findings: list[FindingRecord],
     *,
     verification: dict[str, object] | None = None,
+    execution_time: str | None = None,
 ) -> str:
     package_root = Path(package_dir).expanduser().resolve()
     ordered_findings = customer_visible_findings(findings)
@@ -295,8 +372,8 @@ def render_package_readme(
     if report_manifest.chain:
         lines.append(f"| Chain | `{report_manifest.chain}` |")
     lines.append(f"| Source Identifier | `{report_manifest.source_identifier}` |")
-    if manifest.run.estimated_execution_time:
-        lines.append(f"| Estimated Execution Time | `{manifest.run.estimated_execution_time}` |")
+    if execution_time:
+        lines.append(f"| Execution Time | `{execution_time}` |")
     lines.append(f"| Findings Overview | `{_severity_overview(ordered_findings)}` |")
     lines.append(f"| Validation Overview | `{_validation_overview(ordered_findings)}` |")
     lines.append(f"| Final Report | `{(report_dir / 'AUDIT_REPORT.md').as_posix()}` |")
@@ -392,6 +469,7 @@ def write_package_readme(
     findings: list[FindingRecord],
     *,
     verification: dict[str, object] | None = None,
+    execution_time: str | None = None,
 ) -> None:
     output_dir = Path(package_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -401,6 +479,7 @@ def write_package_readme(
         report_manifest,
         findings,
         verification=verification,
+        execution_time=execution_time,
     )
     (output_dir / "README.md").write_text(readme_text, encoding="utf-8")
     (output_dir / "execution_summary.md").unlink(missing_ok=True)
