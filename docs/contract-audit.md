@@ -19,7 +19,10 @@ flowchart LR
   I --> J[poc_verify]
   J --> K[final_adjudication]
   K --> L[report_build]
-  L --> M[publish_artifacts]
+  L --> M[report_review]
+  M --> N[report_finalize_build]
+  N --> O[package_readme_build]
+  O --> P[publish_artifacts]
 ```
 
 ### Stage Summary
@@ -37,7 +40,10 @@ flowchart LR
 | `poc_author` | Write Foundry PoC tests for the best PoC-eligible findings. | `test/security/*.t.sol` |
 | `poc_verify` | Run `forge build` and `forge test -vvv`. | Verification result JSON |
 | `final_adjudication` | Combine validated findings with PoC results. | Final canonical findings JSON |
-| `report_build` | Render the final report bundle. | `AUDIT_REPORT.md`, `findings.json`, `audit_summary.json`, `report_manifest.json` |
+| `report_build` | Render the draft report bundle. | Draft `AUDIT_REPORT.md`, `findings.json`, `audit_summary.json`, `report_manifest.json` |
+| `report_review` | Perform delivery-level review, reject impossible findings, and merge duplicates. | Final reviewed findings JSON |
+| `report_finalize_build` | Re-render the final report bundle after review. | Final `AUDIT_REPORT.md`, `findings.json`, `audit_summary.json`, `report_manifest.json` |
+| `package_readme_build` | Render the customer-facing package landing page. | Root `README.md` |
 | `publish_artifacts` | Emit the final artifact paths for downstream use. | Artifact index JSON |
 
 ### Built-In Audit Tracks
@@ -92,7 +98,8 @@ The exact manifest used for this engagement was:
   },
   "run": {
     "artifacts_dir": "/data/agentenv/agentflow-audit-reports/solv/cap-vault-reports/artifacts",
-    "parallel_shards": 6
+    "parallel_shards": 6,
+    "estimated_execution_time": "~8h 20m"
   },
   "policy": {
     "allow_source_confirmed_without_poc": true,
@@ -138,15 +145,17 @@ This specific run:
 The completed run reported:
 
 - `4 total` findings
-- `2 high`, `2 medium`
-- `3 PoC Confirmed`, `1 Source Confirmed`
+- `2 high`, `2 medium`, `2 low`
+- `6 PoC Confirmed`, `0 Source Confirmed`
 
 Final finding IDs:
 
 - `CAN-01` High, PoC Confirmed
 - `CAN-02` High, PoC Confirmed
-- `CAN-05` Medium, PoC Confirmed
-- `CAN-06` Medium, Source Confirmed
+- `CAN-03` Medium, PoC Confirmed
+- `CAN-04` Medium, PoC Confirmed
+- `CAN-05` Low, PoC Confirmed
+- `CAN-06` Low, PoC Confirmed
 
 ### 5. Deliverables
 
@@ -154,8 +163,8 @@ The Cap Vault engagement produced these deliverables under `/data/agentenv/agent
 
 | Path | Purpose |
 | --- | --- |
+| `README.md` | Customer-facing landing page summarizing scope, verification, deliverables, and key findings. |
 | `contract_audit_manifest.json` | The exact manifest used for the run. |
-| `execution_summary.md` | Exact commands, timestamps, durations, run id, and final outcome. |
 | `artifacts/report/AUDIT_REPORT.md` | Human-readable audit report for delivery. |
 | `artifacts/report/findings.json` | Canonical machine-readable finding records. |
 | `artifacts/report/audit_summary.json` | Summary JSON with counts and engagement metadata. |
@@ -176,6 +185,9 @@ Inside the run directory, AgentFlow also persisted per-node logs and traces such
 - `artifacts/poc_verify/`
 - `artifacts/final_adjudication/`
 - `artifacts/report_build/`
+- `artifacts/report_review/`
+- `artifacts/report_finalize_build/`
+- `artifacts/package_readme_build/`
 - `artifacts/publish_artifacts/`
 
 ## Manifest and Command Template
@@ -203,7 +215,8 @@ When auditing a new project, the input you prepare is a manifest JSON file. The 
   },
   "run": {
     "artifacts_dir": "/absolute/path/to/report-package/artifacts",
-    "parallel_shards": 6
+    "parallel_shards": 6,
+    "estimated_execution_time": "~6h 30m"
   },
   "policy": {
     "allow_source_confirmed_without_poc": true,

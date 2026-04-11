@@ -70,6 +70,31 @@ def test_load_manifest_accepts_optional_deployment_context_without_leaking_it_to
     assert "deployment_context" not in report_manifest.model_dump(mode="json")
 
 
+def test_load_manifest_normalizes_optional_estimated_execution_time(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    manifest_path = tmp_path / "local-with-estimated-time.json"
+    _write_manifest(
+        manifest_path,
+        {
+            "target": {
+                "source": {"kind": "local", "local_path": str(source_dir)},
+                "report": {"project_name": "Example Vault", "audit_scope": "src/contracts/vault"},
+            },
+            "run": {
+                "artifacts_dir": ".agentflow/audits/example-vault",
+                "parallel_shards": 6,
+                "estimated_execution_time": "  ~8h 20m  ",
+            },
+            "policy": {"allow_source_confirmed_without_poc": True, "max_poc_candidates": 5},
+        },
+    )
+
+    manifest = load_manifest(manifest_path)
+
+    assert manifest.run.estimated_execution_time == "~8h 20m"
+
+
 def test_load_manifest_requires_commit_for_github_sources(tmp_path: Path) -> None:
     manifest_path = tmp_path / "github.json"
     _write_manifest(

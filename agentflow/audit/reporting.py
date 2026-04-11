@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path, PureWindowsPath
 
-from agentflow.audit.models import FindingRecord, ReportManifest
+from agentflow.audit.models import ContractAuditManifest, FindingRecord, ReportManifest
 
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 _SEVERITY_LEVELS = ("critical", "high", "medium", "low", "info")
@@ -18,6 +19,10 @@ _FREE_TEXT_PATH_PATTERNS = (
     re.compile(r'(^|[\s([{"\'])(/[^\s]+)', re.MULTILINE),
 )
 _TRAILING_PATH_PUNCTUATION = ".,:;)]}"
+_FOUNDRY_SUITE_PATTERNS = (
+    re.compile(r"(\d+)\s+passed[;,]\s*(\d+)\s+failed[;,]\s*(\d+)\s+skipped", re.IGNORECASE),
+    re.compile(r"(\d+)\s+passed,\s*(\d+)\s+failed,\s*(\d+)\s+skipped", re.IGNORECASE),
+)
 
 
 def customer_visible_findings(findings: list[FindingRecord]) -> list[FindingRecord]:
@@ -214,6 +219,187 @@ def _validation_counts(findings: list[FindingRecord]) -> dict[str, int]:
     for finding in findings:
         counts[finding.validation_status] += 1
     return counts
+
+
+def _display_path(path: str | Path, *, relative_to: Path) -> str:
+    value = Path(path)
+    if not value.is_absolute():
+        return value.as_posix()
+    try:
+        return value.resolve().relative_to(relative_to.resolve()).as_posix()
+    except ValueError:
+        relpath = os.path.relpath(value.resolve(), relative_to.resolve())
+        return Path(relpath).as_posix()
+
+
+def _severity_overview(findings: list[FindingRecord]) -> str:
+    counts = _severity_counts(findings)
+    parts = [
+        f"{counts[severity]} {severity.title()}"
+        for severity in _SEVERITY_LEVELS
+        if counts[severity] > 0
+    ]
+    if not parts:
+        return "0 total"
+    return f"{len(findings)} total ({', '.join(parts)})"
+
+
+def _validation_overview(findings: list[FindingRecord]) -> str:
+    counts = _validation_counts(findings)
+    parts = [
+        f"{counts['poc_confirmed']} PoC Confirmed",
+        f"{counts['source_confirmed']} Source Confirmed",
+    ]
+    if counts["rejected"] > 0:
+        parts.append(f"{counts['rejected']} Rejected")
+    return ", ".join(parts)
+
+
+def _extract_foundry_suite_summary(stdout_text: str) -> str | None:
+    for pattern in _FOUNDRY_SUITE_PATTERNS:
+        match = pattern.search(stdout_text)
+        if match:
+            passed, failed, skipped = match.groups()
+            return f"{passed} passed, {failed} failed, {skipped} skipped"
+    return None
+
+
+def render_package_readme(
+    package_dir: str | Path,
+    manifest: ContractAuditManifest,
+    report_manifest: ReportManifest,
+    findings: list[FindingRecord],
+    *,
+    verification: dict[str, object] | None = None,
+) -> str:
+    package_root = Path(package_dir).expanduser().resolve()
+    ordered_findings = customer_visible_findings(findings)
+    report_dir = Path("artifacts") / "report"
+    workspace_dir = Path("artifacts") / "workspace" / "foundry_project"
+    source = manifest.target.source
+
+    lines: list[str] = []
+    lines.append(f"# {report_manifest.project_name} Audit Package")
+    lines.append("")
+    lines.append("## Executive Summary")
+    lines.append("")
+    lines.append("| Field | Value |")
+    lines.append("| --- | --- |")
+    lines.append("| Overall Status | `Completed` |")
+    lines.append(f"| Project | `{report_manifest.project_name}` |")
+    lines.append(f"| Audit Scope | `{report_manifest.audit_scope}` |")
+    if report_manifest.chain:
+        lines.append(f"| Chain | `{report_manifest.chain}` |")
+    lines.append(f"| Source Identifier | `{report_manifest.source_identifier}` |")
+    if manifest.run.estimated_execution_time:
+        lines.append(f"| Estimated Execution Time | `{manifest.run.estimated_execution_time}` |")
+    lines.append(f"| Findings Overview | `{_severity_overview(ordered_findings)}` |")
+    lines.append(f"| Validation Overview | `{_validation_overview(ordered_findings)}` |")
+    lines.append(f"| Final Report | `{(report_dir / 'AUDIT_REPORT.md').as_posix()}` |")
+    lines.append("")
+    lines.append("## Scope")
+    lines.append("")
+    lines.append(f"- Project: `{report_manifest.project_name}`")
+    lines.append(f"- Source mode: `{report_manifest.source_mode}`")
+    if source.kind == "local":
+        lines.append(
+            f"- Source directory: `{_display_path(source.local_path, relative_to=package_root)}`"
+        )
+    else:
+        lines.append(f"- Upstream repository: `{source.repo_url}`")
+        lines.append(f"- Fetched revision: `{source.commit}`")
+    lines.append(f"- Audit scope: `{report_manifest.audit_scope}`")
+    if report_manifest.chain:
+        lines.append(f"- Chain: `{report_manifest.chain}`")
+    if report_manifest.contract_address_url:
+        lines.append(f"- Contract address: `{report_manifest.contract_address_url}`")
+    if report_manifest.creation_tx_url:
+        lines.append(f"- Creation transaction: `{report_manifest.creation_tx_url}`")
+    if verification:
+        build = verification.get("build") if isinstance(verification.get("build"), dict) else {}
+        test = verification.get("test") if isinstance(verification.get("test"), dict) else {}
+        verified_workspace = verification.get("workspace")
+        workspace_display = (
+            _display_path(verified_workspace, relative_to=package_root)
+            if isinstance(verified_workspace, str) and verified_workspace.strip()
+            else workspace_dir.as_posix()
+        )
+        lines.append("")
+        lines.append("## Verification")
+        lines.append("")
+        lines.append("```bash")
+        lines.append(f"cd {workspace_display}")
+        if build.get("command"):
+            lines.append(str(build["command"]))
+        if test.get("command"):
+            lines.append(str(test["command"]))
+        lines.append("```")
+        lines.append("")
+        if build:
+            lines.append(
+                f"- `{build.get('command', 'build')}`: `{build.get('status', 'unknown')}` (exit `{build.get('exit_code', 'n/a')}`)"
+            )
+        if test:
+            lines.append(
+                f"- `{test.get('command', 'test')}`: `{test.get('status', 'unknown')}` (exit `{test.get('exit_code', 'n/a')}`)"
+            )
+        suite_summary = _extract_foundry_suite_summary(str(verification.get("stdout", "")))
+        if suite_summary:
+            lines.append(f"- PoC suite: `{suite_summary}`")
+    lines.append("")
+    lines.append("## Deliverables")
+    lines.append("")
+    lines.append("| Path | Description |")
+    lines.append("| --- | --- |")
+    lines.append("| `contract_audit_manifest.json` | Audit manifest consumed by the pipeline |")
+    lines.append(f"| `{(report_dir / 'AUDIT_REPORT.md').as_posix()}` | Human-readable audit report |")
+    lines.append(f"| `{(report_dir / 'findings.json').as_posix()}` | Machine-readable final findings |")
+    lines.append(f"| `{(report_dir / 'audit_summary.json').as_posix()}` | Summary counts and engagement metadata |")
+    lines.append(f"| `{(report_dir / 'report_manifest.json').as_posix()}` | Report-safe manifest used for rendering |")
+    discovery_state_path = package_root / "artifacts" / "workspace" / "discovery_state.json"
+    if discovery_state_path.exists():
+        lines.append("| `artifacts/workspace/discovery_state.json` | Final persisted discovery state |")
+    lines.append("| `artifacts/workspace/foundry_project/` | Runnable Foundry workspace used for PoC verification |")
+    unique_test_paths = []
+    seen_test_paths: set[str] = set()
+    for finding in ordered_findings:
+        test_path = finding.poc.test_path
+        if not test_path or test_path in seen_test_paths:
+            continue
+        seen_test_paths.add(test_path)
+        unique_test_paths.append(test_path)
+    for test_path in unique_test_paths:
+        lines.append(
+            f"| `{(workspace_dir / Path(test_path)).as_posix()}` | Foundry PoC test covering shipped findings |"
+        )
+    lines.append("")
+    lines.append("## Key Findings")
+    lines.append("")
+    for finding in ordered_findings:
+        lines.append(f"- `{finding.id}` {finding.severity.title()}: {_sanitize_text_paths(finding.summary)}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def write_package_readme(
+    package_dir: str | Path,
+    manifest: ContractAuditManifest,
+    report_manifest: ReportManifest,
+    findings: list[FindingRecord],
+    *,
+    verification: dict[str, object] | None = None,
+) -> None:
+    output_dir = Path(package_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    readme_text = render_package_readme(
+        output_dir,
+        manifest,
+        report_manifest,
+        findings,
+        verification=verification,
+    )
+    (output_dir / "README.md").write_text(readme_text, encoding="utf-8")
+    (output_dir / "execution_summary.md").unlink(missing_ok=True)
 
 
 def render_audit_report(manifest: ReportManifest, findings: list[FindingRecord]) -> str:
