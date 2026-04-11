@@ -316,6 +316,35 @@ def test_write_report_bundle_filters_rejected_findings_from_customer_outputs(tmp
     assert summary["validation_counts"]["rejected"] == 0
 
 
+def test_write_report_bundle_writes_root_audit_report_for_standard_package_layout(tmp_path):
+    package_dir = tmp_path / "cap-vault-reports"
+    report_dir = package_dir / "artifacts" / "report"
+    manifest = ReportManifest(
+        project_name="TokenVault",
+        audit_scope="contracts",
+        source_mode="local snapshot",
+        source_identifier="local://snapshot",
+    )
+    findings = [
+        _finding(
+            "F-010",
+            severity="high",
+            validation_status="poc_confirmed",
+            component_file="contracts/High.sol",
+            poc_status="passed",
+            poc_test_path="test/security/VaultPoC.t.sol",
+        )
+    ]
+
+    write_report_bundle(report_dir, manifest, findings)
+
+    nested_report = (report_dir / "AUDIT_REPORT.md").read_text(encoding="utf-8")
+    root_report = (package_dir / "AUDIT_REPORT.md").read_text(encoding="utf-8")
+
+    assert nested_report == root_report
+    assert "### F-010" in root_report
+
+
 def test_render_package_readme_includes_customer_summary_verification_and_deliverables(tmp_path):
     source_dir = tmp_path / "source"
     source_dir.mkdir()
@@ -391,6 +420,11 @@ def test_render_package_readme_includes_customer_summary_verification_and_delive
     assert "## Deliverables" in readme
     assert "## Key Findings" in readme
     assert "| Execution Time | `~8h 20m` |" in readme
+    assert "| Audit Report | `AUDIT_REPORT.md` |" in readme
+    assert (
+        "| PoC Test | `artifacts/workspace/foundry_project/test/security/VaultPoC.t.sol` |"
+        in readme
+    )
     assert "- Source directory: `../source`" in readme
     assert "cd artifacts/workspace/foundry_project" in readme
     assert "forge build" in readme
@@ -398,6 +432,7 @@ def test_render_package_readme_includes_customer_summary_verification_and_delive
     assert "- `forge build`: `passed` (exit `0`)" in readme
     assert "- `forge test -vvv`: `passed` (exit `0`)" in readme
     assert "- PoC suite: `2 passed, 0 failed, 0 skipped`" in readme
+    assert "| `AUDIT_REPORT.md` | Human-readable audit report |" in readme
     assert "`artifacts/workspace/foundry_project/test/security/VaultPoC.t.sol`" in readme
     assert "`CAN-01` High: Permissionless initialization lets the first caller seize bootstrap." in readme
     assert "execution_summary.md" not in readme

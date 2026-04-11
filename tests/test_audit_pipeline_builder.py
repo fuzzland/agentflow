@@ -434,12 +434,13 @@ def test_publish_artifacts_summary_uses_report_relative_paths() -> None:
 
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout) == {
-        "artifacts_root": "run.artifacts_dir",
+        "package_root": ".",
+        "artifacts_root": "artifacts",
         "readme": "README.md",
-        "report_dir": "report",
-        "report": "report/AUDIT_REPORT.md",
-        "findings": "report/findings.json",
-        "summary": "report/audit_summary.json",
+        "audit_report": "AUDIT_REPORT.md",
+        "report_dir": "artifacts/report",
+        "findings": "artifacts/report/findings.json",
+        "summary": "artifacts/report/audit_summary.json",
     }
 
 

@@ -269,6 +269,12 @@ def _extract_foundry_suite_summary(stdout_text: str) -> str | None:
     return f"{passed} passed, {failed} failed, {skipped} skipped"
 
 
+def _root_audit_report_path(report_dir: Path) -> Path:
+    if report_dir.name == "report" and report_dir.parent.name == "artifacts":
+        return report_dir.parent.parent / "AUDIT_REPORT.md"
+    return report_dir / "AUDIT_REPORT.md"
+
+
 def _parse_iso8601(value: str | None) -> datetime | None:
     if value is None:
         return None
@@ -358,6 +364,19 @@ def render_package_readme(
     report_dir = Path("artifacts") / "report"
     workspace_dir = Path("artifacts") / "workspace" / "foundry_project"
     source = manifest.target.source
+    unique_test_paths: list[str] = []
+    seen_test_paths: set[str] = set()
+    for finding in ordered_findings:
+        test_path = finding.poc.test_path
+        if not test_path or test_path in seen_test_paths:
+            continue
+        seen_test_paths.add(test_path)
+        unique_test_paths.append(test_path)
+    public_poc_paths = [
+        (workspace_dir / Path(test_path)).as_posix()
+        for test_path in unique_test_paths
+    ]
+    audit_report_path = "AUDIT_REPORT.md"
 
     lines: list[str] = []
     lines.append(f"# {report_manifest.project_name} Audit Package")
@@ -374,9 +393,13 @@ def render_package_readme(
     lines.append(f"| Source Identifier | `{report_manifest.source_identifier}` |")
     if execution_time:
         lines.append(f"| Execution Time | `{execution_time}` |")
+    lines.append(f"| Audit Report | `{audit_report_path}` |")
+    if public_poc_paths:
+        label = "PoC Test" if len(public_poc_paths) == 1 else "PoC Tests"
+        value = "<br>".join(f"`{path}`" for path in public_poc_paths)
+        lines.append(f"| {label} | {value} |")
     lines.append(f"| Findings Overview | `{_severity_overview(ordered_findings)}` |")
     lines.append(f"| Validation Overview | `{_validation_overview(ordered_findings)}` |")
-    lines.append(f"| Final Report | `{(report_dir / 'AUDIT_REPORT.md').as_posix()}` |")
     lines.append("")
     lines.append("## Scope")
     lines.append("")
@@ -433,7 +456,9 @@ def render_package_readme(
     lines.append("| Path | Description |")
     lines.append("| --- | --- |")
     lines.append("| `contract_audit_manifest.json` | Audit manifest consumed by the pipeline |")
-    lines.append(f"| `{(report_dir / 'AUDIT_REPORT.md').as_posix()}` | Human-readable audit report |")
+    lines.append(f"| `{audit_report_path}` | Human-readable audit report |")
+    for path in public_poc_paths:
+        lines.append(f"| `{path}` | Foundry PoC test covering shipped findings |")
     lines.append(f"| `{(report_dir / 'findings.json').as_posix()}` | Machine-readable final findings |")
     lines.append(f"| `{(report_dir / 'audit_summary.json').as_posix()}` | Summary counts and engagement metadata |")
     lines.append(f"| `{(report_dir / 'report_manifest.json').as_posix()}` | Report-safe manifest used for rendering |")
@@ -441,18 +466,6 @@ def render_package_readme(
     if discovery_state_path.exists():
         lines.append("| `artifacts/workspace/discovery_state.json` | Final persisted discovery state |")
     lines.append("| `artifacts/workspace/foundry_project/` | Runnable Foundry workspace used for PoC verification |")
-    unique_test_paths = []
-    seen_test_paths: set[str] = set()
-    for finding in ordered_findings:
-        test_path = finding.poc.test_path
-        if not test_path or test_path in seen_test_paths:
-            continue
-        seen_test_paths.add(test_path)
-        unique_test_paths.append(test_path)
-    for test_path in unique_test_paths:
-        lines.append(
-            f"| `{(workspace_dir / Path(test_path)).as_posix()}` | Foundry PoC test covering shipped findings |"
-        )
     lines.append("")
     lines.append("## Key Findings")
     lines.append("")
@@ -557,6 +570,7 @@ def write_report_bundle(report_dir: str | Path, manifest: ReportManifest, findin
     }
 
     (output_dir / "AUDIT_REPORT.md").write_text(report_text, encoding="utf-8")
+    _root_audit_report_path(output_dir).write_text(report_text, encoding="utf-8")
     (output_dir / "findings.json").write_text(
         json.dumps(projected_findings, indent=2, sort_keys=True),
         encoding="utf-8",
