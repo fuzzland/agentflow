@@ -349,6 +349,8 @@ def test_write_report_bundle_filters_rejected_findings_from_customer_outputs(tmp
 def test_write_report_bundle_writes_root_audit_report_for_standard_package_layout(tmp_path):
     package_dir = tmp_path / "cap-vault-reports"
     report_dir = package_dir / "artifacts" / "report"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    (report_dir / "AUDIT_REPORT.md").write_text("legacy", encoding="utf-8")
     manifest = ReportManifest(
         project_name="TokenVault",
         audit_scope="contracts",

@@ -601,7 +601,11 @@ def write_report_bundle(report_dir: str | Path, manifest: ReportManifest, findin
         "validation_counts": _validation_counts(ordered_findings),
     }
 
-    root_audit_report_path(output_dir).write_text(report_text, encoding="utf-8")
+    root_report_path = root_audit_report_path(output_dir)
+    root_report_path.write_text(report_text, encoding="utf-8")
+    legacy_report_path = output_dir / "AUDIT_REPORT.md"
+    if legacy_report_path != root_report_path:
+        legacy_report_path.unlink(missing_ok=True)
     (output_dir / "findings.json").write_text(
         json.dumps(projected_findings, indent=2, sort_keys=True),
         encoding="utf-8",
