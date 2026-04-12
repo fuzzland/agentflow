@@ -3,6 +3,7 @@ from __future__ import annotations
 from agentflow.audit.discovery import (
     DiscoveryState,
     apply_discovery_round,
+    apply_discovery_round_until_stop,
     customer_visible_findings,
     findings_from_text,
 )
@@ -121,3 +122,39 @@ def test_customer_visible_findings_excludes_merged_findings():
     visible = customer_visible_findings(state)
 
     assert [finding.dedup_fingerprint for finding in visible] == ["fp-keep"]
+
+
+def test_apply_discovery_round_until_stop_advances_twice_when_saved_round_is_new():
+    state = DiscoveryState()
+
+    next_state, decisions = apply_discovery_round_until_stop(
+        state,
+        [_finding("fp-1", validation_status="source_confirmed")],
+        no_progress_patience=1,
+        max_rounds=2,
+    )
+
+    assert [decision.status for decision in decisions] == ["CONTINUE", "STOP"]
+    assert next_state.round == 2
+    assert next_state.consecutive_no_progress == 1
+    assert "fp-1" in next_state.accepted_findings
+
+
+def test_apply_discovery_round_until_stop_stops_immediately_when_saved_round_is_already_applied():
+    state, _ = apply_discovery_round(
+        DiscoveryState(),
+        [_finding("fp-1", validation_status="source_confirmed")],
+        no_progress_patience=3,
+    )
+
+    next_state, decisions = apply_discovery_round_until_stop(
+        state,
+        [_finding("fp-1", validation_status="source_confirmed")],
+        no_progress_patience=1,
+        max_rounds=2,
+    )
+
+    assert [decision.status for decision in decisions] == ["STOP"]
+    assert next_state.round == 2
+    assert next_state.consecutive_no_progress == 1
+    assert next_state.accepted_findings["fp-1"].validation_status == "source_confirmed"

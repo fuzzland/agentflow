@@ -9,23 +9,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from agentflow import Graph, claude, codex, python_node
+from agentflow import Graph, python_node
 from agentflow.audit.intake import load_manifest
 from agentflow.audit.pipeline_builder import (
     AUDIT_MANIFEST_ENV,
-    CODEX_BYPASS_EXTRA_ARGS,
-    _AUDIT_CODEX_RETRIES,
-    _AUDIT_CODEX_RETRY_BACKOFF_SECONDS,
-    _CURATION_NO_CHANGE_PATIENCE,
     _CURATION_STATE_FILENAME,
     _deployment_context_prompt,
     _manifest_runtime_python_node,
-)
-
-
-DEFAULT_SAVED_EVIDENCE_GATE_RUN_JSON = (
-    "/data/agentenv/agentflow-audit-reports/dolomite-exchange/routers-reports/"
-    "runs/0f665f716bbd489884be1d09bdd26064/run.json"
 )
 
 
@@ -42,73 +32,13 @@ if not resolved_manifest_path.is_absolute():
 else:
     resolved_manifest_path = resolved_manifest_path.resolve()
 
-saved_evidence_gate_run_json = os.environ.get(
-    "AGENTFLOW_SAVED_EVIDENCE_GATE_RUN_JSON",
-    DEFAULT_SAVED_EVIDENCE_GATE_RUN_JSON,
-)
 manifest = load_manifest(resolved_manifest_path)
 poc_workspace_dir = Path(manifest.run.artifacts_dir) / "workspace" / "foundry_project"
 deployment_context_prompt = _deployment_context_prompt(manifest)
 
 
-def _apply_saved_round_code(expect_status: str) -> str:
-    return _manifest_runtime_python_node(
-        dedent(
-            f"""
-            import json
-            from pathlib import Path
-
-            from agentflow.audit.discovery import (
-                apply_discovery_round_until_stop,
-                findings_from_text,
-                load_discovery_state,
-                write_discovery_state,
-            )
-            from agentflow.audit.intake import load_manifest
-
-            manifest = load_manifest(resolved_manifest_path)
-            state_path = Path(manifest.run.artifacts_dir) / "workspace" / "discovery_state.json"
-            run = json.loads(Path({saved_evidence_gate_run_json!r}).read_text(encoding="utf-8"))
-            output = run["nodes"]["evidence_gate"].get("output")
-            if not isinstance(output, str) or not output.strip():
-                raise SystemExit("missing saved evidence_gate output")
-            findings = findings_from_text(output)
-            state = load_discovery_state(state_path)
-            state, decisions = apply_discovery_round_until_stop(
-                state,
-                findings,
-                no_progress_patience=1,
-                max_rounds=2,
-            )
-            write_discovery_state(state_path, state)
-            decision = decisions[-1]
-            print(
-                json.dumps(
-                    {{
-                        "decisions": [item.model_dump(mode="json") for item in decisions],
-                        "status": decision.status,
-                        "round": state.round,
-                        "consecutive_no_progress": state.consecutive_no_progress,
-                        "new_fingerprints": decision.new_fingerprints,
-                        "validation_upgrades": decision.validation_upgrades,
-                        "accepted_findings": len(state.accepted_findings),
-                        "rejected_findings": len(state.rejected_findings),
-                    }},
-                    indent=2,
-                )
-            )
-            expected_statuses = [{expect_status!r}]
-            if {expect_status!r} == "CONTINUE":
-                expected_statuses.append("STOP")
-            if decision.status not in expected_statuses:
-                raise SystemExit(f"expected decision status {expect_status}, got {{decision.status}}")
-            """
-        ).strip()
-    )
-
-
 with Graph(
-    "contract-audit-continue-from-saved-evidence-gate",
+    "contract-audit-continue-from-existing-pocs",
     working_dir=str(REPO_ROOT),
     concurrency=1,
 ) as graph:
@@ -155,22 +85,21 @@ with Graph(
             import json
             from pathlib import Path
 
-            from agentflow.audit.foundry import prepare_foundry_workspace
             from agentflow.audit.intake import load_manifest
-            from agentflow.audit.materialize import materialize_source
 
             manifest = load_manifest(resolved_manifest_path)
-            materialized = materialize_source(manifest, Path(manifest.run.artifacts_dir))
-            prepared = prepare_foundry_workspace(materialized, Path(manifest.run.artifacts_dir))
+            workspace_dir = Path(manifest.run.artifacts_dir) / "workspace" / "foundry_project"
+            if not workspace_dir.exists():
+                raise SystemExit(f"existing foundry workspace not found: {workspace_dir}")
+            foundry_toml_path = workspace_dir / "foundry.toml"
+            remappings_path = workspace_dir / "remappings.txt"
             print(
                 json.dumps(
                     {
-                        "workspace_dir": str(prepared.workspace_dir),
-                        "source_snapshot_dir": str(prepared.source_snapshot_dir),
-                        "foundry_toml_path": str(prepared.foundry_toml_path),
-                        "remappings_path": (
-                            str(prepared.remappings_path) if prepared.remappings_path else None
-                        ),
+                        "workspace_dir": str(workspace_dir),
+                        "source_snapshot_dir": None,
+                        "foundry_toml_path": str(foundry_toml_path),
+                        "remappings_path": str(remappings_path) if remappings_path.exists() else None,
                     },
                     indent=2,
                 )
@@ -178,184 +107,58 @@ with Graph(
             """
         ),
     )
-    apply_saved_round_1 = python_node(
-        task_id="apply_saved_round_1",
-        code=_apply_saved_round_code("CONTINUE"),
-    )
-    apply_saved_round_2 = python_node(
-        task_id="apply_saved_round_2",
-        code=_apply_saved_round_code("STOP"),
-    )
-    discovery_finalize = python_node(
-        task_id="discovery_finalize",
-        code=_manifest_runtime_python_node(
-            """
-            import json
-            from pathlib import Path
-
-            from agentflow.audit.discovery import customer_visible_findings, load_discovery_state
-            from agentflow.audit.intake import load_manifest
-
-            manifest = load_manifest(resolved_manifest_path)
-            state_path = Path(manifest.run.artifacts_dir) / "workspace" / "discovery_state.json"
-            state = load_discovery_state(state_path)
-            print(
-                json.dumps(
-                    [finding.model_dump(mode="json") for finding in customer_visible_findings(state)],
-                    separators=(",", ":"),
-                )
-            )
-            """
-        ),
-    )
-    load_finding_curation_state = python_node(
-        task_id="load_finding_curation_state",
+    load_curated_findings = python_node(
+        task_id="load_curated_findings",
         code=_manifest_runtime_python_node(
             f"""
             import json
             from pathlib import Path
 
-            from agentflow.audit.curation import current_curated_findings, load_curation_state
-            from agentflow.audit.discovery import findings_from_text
+            from agentflow.audit.curation import load_curation_state
             from agentflow.audit.intake import load_manifest
 
             manifest = load_manifest(resolved_manifest_path)
             state_path = Path(manifest.run.artifacts_dir) / "workspace" / "{_CURATION_STATE_FILENAME}"
-            base_findings_payload = {{{{ nodes.discovery_finalize.output | tojson }}}}
-            if not isinstance(base_findings_payload, str):
-                base_findings_payload = json.dumps(base_findings_payload)
-            base_findings = findings_from_text(base_findings_payload)
             state = load_curation_state(state_path)
             print(
                 json.dumps(
-                    [
-                        finding.model_dump(mode="json")
-                        for finding in current_curated_findings(state, base_findings)
-                    ],
+                    [finding.model_dump(mode="json") for finding in state.curated_findings],
                     separators=(",", ":"),
                 )
             )
             """
         ),
     )
-    finding_curation_review = python_node(
-        task_id="finding_curation_review",
+    derive_poc_mappings = python_node(
+        task_id="derive_poc_mappings",
         code=dedent(
             """
             import json
+            from pathlib import Path
 
-            from agentflow.audit.curation import curate_findings
-            from agentflow.audit.discovery import findings_from_text
+            from agentflow.audit.models import FindingRecord
+            from agentflow.audit.poc_mapping import derive_poc_mappings
+            from agentflow.audit.reporting import extract_json_document
 
-            findings_payload = {{ nodes.load_finding_curation_state.output | tojson }}
-            if not isinstance(findings_payload, str):
-                findings_payload = json.dumps(findings_payload)
-            findings = findings_from_text(findings_payload)
-            print(
-                json.dumps(
-                    [finding.model_dump(mode="json") for finding in curate_findings(findings)],
-                    separators=(",", ":"),
-                )
+            prepared_payload = {{ nodes.prepare_foundry_workspace.output | tojson }}
+            prepared = (
+                json.loads(prepared_payload)
+                if isinstance(prepared_payload, str)
+                else prepared_payload
             )
+            findings_payload = {{ nodes.load_curated_findings.output | tojson }}
+            findings = (
+                extract_json_document(findings_payload)
+                if isinstance(findings_payload, str)
+                else findings_payload
+            )
+            if not isinstance(findings, list):
+                raise ValueError("load_curated_findings output must decode to a JSON list")
+            records = [FindingRecord.model_validate(item) for item in findings]
+            workspace_dir = Path(prepared["workspace_dir"])
+            print(json.dumps(derive_poc_mappings(records, workspace_dir), indent=2))
             """
         ).strip(),
-    )
-    finding_curation_gate = python_node(
-        task_id="finding_curation_gate",
-        code=_manifest_runtime_python_node(
-            f"""
-            import json
-            from pathlib import Path
-
-            from agentflow.audit.curation import advance_curation_state
-            from agentflow.audit.discovery import findings_from_text
-            from agentflow.audit.intake import load_manifest
-
-            manifest = load_manifest(resolved_manifest_path)
-            state_path = Path(manifest.run.artifacts_dir) / "workspace" / "{_CURATION_STATE_FILENAME}"
-            review_output = {{{{ nodes.finding_curation_review.output | tojson }}}}
-            if not isinstance(review_output, str):
-                review_output = json.dumps(review_output)
-            findings = findings_from_text(review_output)
-            state, decision = advance_curation_state(
-                state_path,
-                findings,
-                no_change_patience={_CURATION_NO_CHANGE_PATIENCE},
-            )
-            print(
-                json.dumps(
-                    {{
-                        "status": decision.status,
-                        "round": state.round,
-                        "consecutive_no_change": state.consecutive_no_change,
-                        "changed": decision.changed,
-                        "previous_count": decision.previous_count,
-                        "current_count": decision.current_count,
-                    }},
-                    indent=2,
-                )
-            )
-            """
-        ),
-        success_criteria=[{"kind": "output_contains", "value": '"status": "STOP"'}],
-    )
-    finding_curation_finalize = python_node(
-        task_id="finding_curation_finalize",
-        code=_manifest_runtime_python_node(
-            f"""
-            import json
-            from pathlib import Path
-
-            from agentflow.audit.curation import current_curated_findings, load_curation_state
-            from agentflow.audit.discovery import findings_from_text
-            from agentflow.audit.intake import load_manifest
-
-            manifest = load_manifest(resolved_manifest_path)
-            state_path = Path(manifest.run.artifacts_dir) / "workspace" / "{_CURATION_STATE_FILENAME}"
-            base_findings_payload = {{{{ nodes.discovery_finalize.output | tojson }}}}
-            if not isinstance(base_findings_payload, str):
-                base_findings_payload = json.dumps(base_findings_payload)
-            base_findings = findings_from_text(base_findings_payload)
-            state = load_curation_state(state_path)
-            print(
-                json.dumps(
-                    [
-                        finding.model_dump(mode="json")
-                        for finding in current_curated_findings(state, base_findings)
-                    ],
-                    separators=(",", ":"),
-                )
-            )
-            """
-        ),
-    )
-    poc_author = codex(
-        task_id="poc_author",
-        prompt=(
-            "Author Foundry PoC tests for every non-rejected validated finding.\n"
-            f"Legacy policy field: max_poc_candidates={manifest.policy.max_poc_candidates} (ignored in this pipeline version; every shipped finding must have a PoC).\n"
-            "Keep changes limited to test assets and the minimum harness support needed.\n"
-            "Do not spend time building a broad generic framework before producing concrete PoC files.\n"
-            "In your first edit batch, create at least one concrete `test/security/*.t.sol` file or return blocked mappings for findings you cannot implement.\n"
-            "Favor direct, targeted tests and tiny local mocks over reusable abstraction layers.\n"
-            "If a finding is not realistically PoC-able in this repository, return it with null test fields and a short reason instead of over-engineering scaffolding.\n"
-            "Prioritize the strongest and cheapest PoCs first. You do not need to make every finding PoC-able.\n"
-            "For findings that would require disproportionate new infrastructure, quickly return a null mapping with a concrete blocked reason.\n"
-            "After writing files, return only a JSON array with this shape:\n"
-            '[{"finding_id":"CAN-01","test_path":"test/security/VaultPoC.t.sol","test_name":"test_can_01_initialize_takeover","reason":null}]\n'
-            "Include every non-rejected finding exactly once. If you cannot produce a PoC for a finding, keep it in the array with null test fields and a short reason.\n\n"
-            "{{ nodes.finding_curation_finalize.output }}"
-        ),
-        tools="read_write",
-        timeout_seconds=1800,
-        extra_args=CODEX_BYPASS_EXTRA_ARGS,
-        retries=_AUDIT_CODEX_RETRIES,
-        retry_backoff_seconds=_AUDIT_CODEX_RETRY_BACKOFF_SECONDS,
-        target={"kind": "local", "cwd": str(poc_workspace_dir)},
-        skills=[
-            "foundry-solidity::default",
-            "property-based-testing::default",
-        ],
     )
     poc_verify = python_node(
         task_id="poc_verify",
@@ -373,13 +176,13 @@ with Graph(
                 if isinstance(prepared_payload, str)
                 else prepared_payload
             )
-            findings_payload = {{ nodes.finding_curation_finalize.output | tojson }}
+            findings_payload = {{ nodes.load_curated_findings.output | tojson }}
             findings = (
                 extract_json_document(findings_payload)
                 if isinstance(findings_payload, str)
                 else findings_payload
             )
-            authored_payload = {{ nodes.poc_author.output | tojson }}
+            authored_payload = {{ nodes.derive_poc_mappings.output | tojson }}
             authored = (
                 extract_json_document(authored_payload)
                 if isinstance(authored_payload, str)
@@ -454,13 +257,13 @@ with Graph(
             from agentflow.audit.models import FindingRecord
             from agentflow.audit.reporting import extract_json_document
 
-            findings_payload = {{ nodes.finding_curation_finalize.output | tojson }}
+            findings_payload = {{ nodes.load_curated_findings.output | tojson }}
             findings = (
                 extract_json_document(findings_payload)
                 if isinstance(findings_payload, str)
                 else findings_payload
             )
-            authored_payload = {{ nodes.poc_author.output | tojson }}
+            authored_payload = {{ nodes.derive_poc_mappings.output | tojson }}
             authored = (
                 extract_json_document(authored_payload)
                 if isinstance(authored_payload, str)
@@ -474,9 +277,9 @@ with Graph(
             )
 
             if not isinstance(findings, list):
-                raise ValueError("finding_curation_finalize output must decode to a JSON list")
+                raise ValueError("load_curated_findings output must decode to a JSON list")
             if not isinstance(authored, list):
-                raise ValueError("poc_author output must decode to a JSON list")
+                raise ValueError("derive_poc_mappings output must decode to a JSON list")
             if not isinstance(verification, dict):
                 raise ValueError("poc_verify output must decode to a JSON object")
 
@@ -578,26 +381,18 @@ with Graph(
             """
         ),
     )
-    report_review = claude(
+    report_review = python_node(
         task_id="report_review",
-        prompt=(
-            "Review this draft audit report as a delivery QA pass and return only a revised JSON array of final findings.\n"
-            "Do not add, remove, merge, split, reject, or re-scope findings.\n"
-            "Do not change finding count, `dedup_fingerprint`, `severity`, `validation_status`, or `poc.test_path`.\n"
-            "Keep every finding PoC-confirmed with a non-null `poc.test_path`.\n"
-            "Only improve wording, ordering, report-safe phrasing, and citation clarity.\n"
-            "Return only final `FindingRecord` JSON.\n\n"
-            f"{deployment_context_prompt}\n"
-            "Draft report:\n{{ nodes.report_build.output }}\n\n"
-            "Draft findings JSON:\n{{ nodes.final_adjudication.output }}\n\n"
-            "PoC verification:\n{{ nodes.poc_verify.output }}"
-        ),
-        tools="read_only",
-        timeout_seconds=900,
-        extra_args=CODEX_BYPASS_EXTRA_ARGS,
-        retries=_AUDIT_CODEX_RETRIES,
-        retry_backoff_seconds=_AUDIT_CODEX_RETRY_BACKOFF_SECONDS,
-        target={"kind": "local", "cwd": str(poc_workspace_dir)},
+        code=dedent(
+            """
+            review_payload = {{ nodes.final_adjudication.output | tojson }}
+            if isinstance(review_payload, str):
+                print(review_payload)
+            else:
+                import json
+                print(json.dumps(review_payload, indent=2))
+            """
+        ).strip(),
     )
     report_finalize_build = python_node(
         task_id="report_finalize_build",
@@ -715,9 +510,8 @@ with Graph(
         ).strip(),
     )
 
-    intake_target >> materialize_target >> prepare_foundry_workspace >> apply_saved_round_1 >> apply_saved_round_2 >> discovery_finalize
-    discovery_finalize >> load_finding_curation_state >> finding_curation_review >> finding_curation_gate >> finding_curation_finalize >> poc_author >> poc_verify >> final_adjudication >> report_build >> report_review >> report_finalize_build >> package_readme_build >> publish_artifacts
-    finding_curation_gate.on_failure >> load_finding_curation_state
+    intake_target >> materialize_target >> prepare_foundry_workspace >> load_curated_findings >> derive_poc_mappings >> poc_verify >> final_adjudication
+    final_adjudication >> report_build >> report_review >> report_finalize_build >> package_readme_build >> publish_artifacts
 
 
 print(graph.to_json())

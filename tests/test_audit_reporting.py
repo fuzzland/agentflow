@@ -21,6 +21,7 @@ import json
 from agentflow.audit.reporting import (
     extract_json_document,
     infer_package_execution_time,
+    normalize_shard_findings,
     public_findings_projection,
     render_audit_report,
     render_package_readme,
@@ -291,6 +292,35 @@ def test_extract_json_document_accepts_trailing_text_after_json_object():
     assert payload == {"status": "ok"}
 
 
+def test_normalize_shard_findings_accepts_dict_wrapped_candidate_lists():
+    normalized = normalize_shard_findings(
+        [
+            {
+                "track": "access-control-and-init",
+                "output": 'progress\n{"candidate_findings":[]}',
+            },
+            {
+                "track": "accounting-and-rounding",
+                "output": (
+                    'progress\n'
+                    '{"candidates":[{"id":"CF-01","title":"Issue A"}]}'
+                ),
+            },
+        ]
+    )
+
+    assert normalized == [
+        {
+            "track": "access-control-and-init",
+            "findings": [],
+        },
+        {
+            "track": "accounting-and-rounding",
+            "findings": [{"id": "CF-01", "title": "Issue A"}],
+        },
+    ]
+
+
 def test_write_report_bundle_filters_rejected_findings_from_customer_outputs(tmp_path):
     manifest = ReportManifest(
         project_name="TokenVault",
@@ -338,10 +368,9 @@ def test_write_report_bundle_writes_root_audit_report_for_standard_package_layou
 
     write_report_bundle(report_dir, manifest, findings)
 
-    nested_report = (report_dir / "AUDIT_REPORT.md").read_text(encoding="utf-8")
     root_report = (package_dir / "AUDIT_REPORT.md").read_text(encoding="utf-8")
 
-    assert nested_report == root_report
+    assert not (report_dir / "AUDIT_REPORT.md").exists()
     assert "### F-010" in root_report
 
 

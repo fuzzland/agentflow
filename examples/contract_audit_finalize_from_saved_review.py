@@ -163,7 +163,11 @@ with Graph(
 
             from agentflow.audit.intake import build_report_manifest, load_manifest
             from agentflow.audit.models import FindingRecord
-            from agentflow.audit.reporting import extract_json_document, write_report_bundle
+            from agentflow.audit.reporting import (
+                extract_json_document,
+                root_audit_report_path,
+                write_report_bundle,
+            )
 
             manifest = load_manifest(resolved_manifest_path)
             materialized_payload = {{ nodes.materialize_target.output | tojson }}
@@ -190,7 +194,7 @@ with Graph(
             )
             report_dir = Path(manifest.run.artifacts_dir) / "report"
             write_report_bundle(report_dir, report_manifest, findings)
-            print((report_dir / "AUDIT_REPORT.md").read_text(encoding="utf-8"))
+            print(root_audit_report_path(report_dir).read_text(encoding="utf-8"))
             """
         ),
     )

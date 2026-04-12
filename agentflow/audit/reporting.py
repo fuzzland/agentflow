@@ -88,9 +88,25 @@ def extract_json_document(text: str) -> object:
 
 def _extract_findings_list(text: str) -> list[object]:
     payload = extract_json_document(text)
+    if isinstance(payload, dict):
+        for key in ("candidate_findings", "candidates", "findings"):
+            candidate_payload = payload.get(key)
+            if isinstance(candidate_payload, list):
+                payload = candidate_payload
+                break
+        else:
+            raise ValueError("shard findings must decode to a JSON list")
     if not isinstance(payload, list):
         raise ValueError("shard findings must decode to a JSON list")
-    return payload
+
+    findings: list[object] = []
+    for item in payload:
+        if item in (0, None, False, ""):
+            continue
+        if not isinstance(item, dict):
+            raise ValueError("shard findings list must contain JSON objects")
+        findings.append(item)
+    return findings
 
 
 def _candidate_json_strings_from_stdout(stdout_text: str) -> list[str]:
@@ -139,6 +155,22 @@ def _candidate_json_strings_from_trace_events(trace_events: object) -> list[str]
         content = event.get("content")
         if kind in {"assistant_message", "structured_output", "completed"} and isinstance(content, str):
             candidates.append(content)
+        if kind == "item_completed":
+            raw = event.get("raw")
+            if not isinstance(raw, dict):
+                continue
+            item = raw.get("item")
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type in {"agent_message", "agentMessage"}:
+                text = item.get("text")
+                if isinstance(text, str):
+                    candidates.append(text)
+            elif item_type == "command_execution":
+                text = item.get("aggregated_output")
+                if isinstance(text, str):
+                    candidates.append(text)
     return candidates
 
 
@@ -269,7 +301,7 @@ def _extract_foundry_suite_summary(stdout_text: str) -> str | None:
     return f"{passed} passed, {failed} failed, {skipped} skipped"
 
 
-def _root_audit_report_path(report_dir: Path) -> Path:
+def root_audit_report_path(report_dir: Path) -> Path:
     if report_dir.name == "report" and report_dir.parent.name == "artifacts":
         return report_dir.parent.parent / "AUDIT_REPORT.md"
     return report_dir / "AUDIT_REPORT.md"
@@ -569,8 +601,7 @@ def write_report_bundle(report_dir: str | Path, manifest: ReportManifest, findin
         "validation_counts": _validation_counts(ordered_findings),
     }
 
-    (output_dir / "AUDIT_REPORT.md").write_text(report_text, encoding="utf-8")
-    _root_audit_report_path(output_dir).write_text(report_text, encoding="utf-8")
+    root_audit_report_path(output_dir).write_text(report_text, encoding="utf-8")
     (output_dir / "findings.json").write_text(
         json.dumps(projected_findings, indent=2, sort_keys=True),
         encoding="utf-8",

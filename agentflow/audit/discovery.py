@@ -147,6 +147,27 @@ def advance_discovery_state(
     return next_state, decision
 
 
+def apply_discovery_round_until_stop(
+    state: DiscoveryState,
+    findings: list[FindingRecord],
+    *,
+    no_progress_patience: int = _NO_PROGRESS_PATIENCE,
+    max_rounds: int = 2,
+) -> tuple[DiscoveryState, list[DiscoveryDecision]]:
+    current_state = state
+    decisions: list[DiscoveryDecision] = []
+    for _ in range(max_rounds):
+        current_state, decision = apply_discovery_round(
+            current_state,
+            findings,
+            no_progress_patience=no_progress_patience,
+        )
+        decisions.append(decision)
+        if decision.status == "STOP":
+            break
+    return current_state, decisions
+
+
 def customer_visible_findings(state: DiscoveryState) -> list[FindingRecord]:
     visible = [
         finding
