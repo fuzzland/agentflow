@@ -61,7 +61,7 @@ If `parallel_shards` is `6`, all built-in tracks run.
 
 ## Quick Start: Cap Vault
 
-This section uses the Cap Vault engagement as a concrete example. Replace the example paths below with the local paths for your own checkout and report package.
+This section uses the real Cap Vault engagement package stored under `/data/agentenv/agentflow-audit-reports/solv/cap-vault-reports`.
 
 ### 1. Prepare the Input Data
 
@@ -73,9 +73,9 @@ For a real audit run, prepare these inputs:
 
 For the Cap Vault run, the prepared inputs were:
 
-- Source tree: `/path/to/cap-vault`
-- Manifest: `/path/to/cap-vault-reports/contract_audit_manifest.json`
-- Report package root: `/path/to/cap-vault-reports`
+- Source tree: `/data/agentenv/agentflow-audit-reports/solv/cap-vault`
+- Manifest: `/data/agentenv/agentflow-audit-reports/solv/cap-vault-reports/contract_audit_manifest.json`
+- Report package root: `/data/agentenv/agentflow-audit-reports/solv/cap-vault-reports`
 
 The exact manifest used for this engagement was:
 
@@ -84,7 +84,7 @@ The exact manifest used for this engagement was:
   "target": {
     "source": {
       "kind": "local",
-      "local_path": "/path/to/cap-vault"
+      "local_path": "/data/agentenv/agentflow-audit-reports/solv/cap-vault"
     },
     "report": {
       "project_name": "Cap Vault",
@@ -97,7 +97,7 @@ The exact manifest used for this engagement was:
     }
   },
   "run": {
-    "artifacts_dir": "/path/to/cap-vault-reports/artifacts",
+    "artifacts_dir": "/data/agentenv/agentflow-audit-reports/solv/cap-vault-reports/artifacts",
     "parallel_shards": 6
   },
   "policy": {
@@ -112,11 +112,11 @@ The exact manifest used for this engagement was:
 Run validation first from the AgentFlow repository root:
 
 ```bash
-cd /path/to/agentflow
+cd /data/agentenv/agentflow
 
-AGENTFLOW_CONTRACT_AUDIT_MANIFEST=/path/to/cap-vault-reports/contract_audit_manifest.json \
+AGENTFLOW_CONTRACT_AUDIT_MANIFEST=/data/agentenv/agentflow-audit-reports/solv/cap-vault-reports/contract_audit_manifest.json \
 PATH="$HOME/.foundry/bin:$PATH" \
-/path/to/agentflow/.venv/bin/python -m agentflow.cli validate examples/contract_audit.py
+/data/agentenv/agentflow/.venv/bin/python -m agentflow.cli validate examples/contract_audit.py
 ```
 
 This checks that the manifest shape, source configuration, scope path, artifact directory, and policy values are acceptable before the audit starts.
@@ -126,12 +126,12 @@ This checks that the manifest shape, source configuration, scope path, artifact 
 The real Cap Vault run used this command:
 
 ```bash
-cd /path/to/agentflow
+cd /data/agentenv/agentflow
 
-AGENTFLOW_CONTRACT_AUDIT_MANIFEST=/path/to/cap-vault-reports/contract_audit_manifest.json \
+AGENTFLOW_CONTRACT_AUDIT_MANIFEST=/data/agentenv/agentflow-audit-reports/solv/cap-vault-reports/contract_audit_manifest.json \
 PATH="$HOME/.foundry/bin:$PATH" \
-/path/to/agentflow/.venv/bin/python -m agentflow.cli run examples/contract_audit.py \
-  --runs-dir /path/to/cap-vault-reports/runs \
+/data/agentenv/agentflow/.venv/bin/python -m agentflow.cli run examples/contract_audit.py \
+  --runs-dir /data/agentenv/agentflow-audit-reports/solv/cap-vault-reports/runs \
   --output summary \
   --progress off
 ```
@@ -162,7 +162,7 @@ Final finding IDs:
 
 ### 5. Deliverables
 
-The Cap Vault engagement produced these deliverables under `/path/to/cap-vault-reports`:
+The Cap Vault engagement produced these deliverables under `/data/agentenv/agentflow-audit-reports/solv/cap-vault-reports`:
 
 | Path | Purpose |
 | --- | --- |
@@ -280,7 +280,7 @@ Once the manifest exists, the normal command sequence is:
 ```bash
 AGENTFLOW_CONTRACT_AUDIT_MANIFEST=/absolute/path/to/contract_audit_manifest.json \
 PATH="$HOME/.foundry/bin:$PATH" \
-/path/to/agentflow/.venv/bin/python -m agentflow.cli validate examples/contract_audit.py
+/data/agentenv/agentflow/.venv/bin/python -m agentflow.cli validate examples/contract_audit.py
 ```
 
 2. Run:
@@ -288,7 +288,7 @@ PATH="$HOME/.foundry/bin:$PATH" \
 ```bash
 AGENTFLOW_CONTRACT_AUDIT_MANIFEST=/absolute/path/to/contract_audit_manifest.json \
 PATH="$HOME/.foundry/bin:$PATH" \
-/path/to/agentflow/.venv/bin/python -m agentflow.cli run examples/contract_audit.py \
+/data/agentenv/agentflow/.venv/bin/python -m agentflow.cli run examples/contract_audit.py \
   --runs-dir /absolute/path/to/runs \
   --output summary \
   --progress off
