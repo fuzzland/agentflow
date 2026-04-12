@@ -246,3 +246,37 @@ def test_api_stream_supports_external_run_updates(tmp_path):
     assert response.status_code == 200
     events = [json.loads(line.removeprefix("data: ")) for line in lines if line.startswith("data: ")]
     assert [event["type"] for event in events] == ["run_started", "node_started", "run_completed"]
+
+
+def test_api_stream_refreshes_run_state_for_external_updates(tmp_path, monkeypatch):
+    orchestrator = make_orchestrator(tmp_path)
+    app = create_app(store=orchestrator.store, orchestrator=orchestrator)
+    client = TestClient(app)
+
+    create = client.post(
+        "/api/runs",
+        json={
+            "pipeline": {
+                "name": "stream-refresh",
+                "working_dir": str(tmp_path),
+                "nodes": [{"id": "alpha", "agent": "codex", "prompt": "stream ok"}],
+            }
+        },
+    )
+    run_id = create.json()["id"]
+
+    captured: dict[str, object] = {}
+
+    async def _fake_follow(store, run_id_arg, *, poll_interval=0.25, refresh_run_state=True):
+        captured["run_id"] = run_id_arg
+        captured["refresh_run_state"] = refresh_run_state
+        yield RunEvent(run_id=run_id_arg, type="run_completed", data={"status": "completed"})
+
+    monkeypatch.setattr("agentflow.app.follow_run_events", _fake_follow)
+
+    with client.stream("GET", f"/api/runs/{run_id}/stream") as response:
+        lines = [line for line in response.iter_lines() if line]
+
+    assert response.status_code == 200
+    assert captured == {"run_id": run_id, "refresh_run_state": True}
+    assert any(line.startswith("data: ") for line in lines)
