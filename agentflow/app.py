@@ -167,7 +167,7 @@ def create_app(*, store: RunStore | None = None, orchestrator: Orchestrator | No
             raise HTTPException(status_code=404, detail="run not found")
 
         async def event_stream():
-            async for event in follow_run_events(app.state.store, run_id, refresh_run_state=False):
+            async for event in follow_run_events(app.state.store, run_id, refresh_run_state=True):
                 yield f"data: {event.model_dump_json()}\n\n"
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")

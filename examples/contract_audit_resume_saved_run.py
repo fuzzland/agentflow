@@ -766,9 +766,9 @@ def build_resume_graph(manifest_path: str, saved_run_json: str) -> Graph:
                             "artifacts_root": "artifacts",
                             "readme": "README.md",
                             "audit_report": "AUDIT_REPORT.md",
-                            "report_dir": ("artifacts" / report_dir).as_posix(),
-                            "findings": ("artifacts" / report_dir / "findings.json").as_posix(),
-                            "summary": ("artifacts" / report_dir / "audit_summary.json").as_posix(),
+                            "report_dir": (Path("artifacts") / report_dir).as_posix(),
+                            "findings": (Path("artifacts") / report_dir / "findings.json").as_posix(),
+                            "summary": (Path("artifacts") / report_dir / "audit_summary.json").as_posix(),
                         },
                         indent=2,
                     )
