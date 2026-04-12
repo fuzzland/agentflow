@@ -35,6 +35,17 @@ def _pid_exists(pid: int) -> bool:
     return True
 
 
+def test_signal_process_group_ignores_permission_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = LocalRunner()
+
+    def _raise_permission_error(process_group_id: int, sig: int) -> None:
+        raise PermissionError("not permitted")
+
+    monkeypatch.setattr("agentflow.runners.local.os.killpg", _raise_permission_error)
+
+    runner._signal_process_group(12345, signal.SIGTERM)
+
+
 async def _wait_for_pid_exit(pid: int, *, timeout: float = 2.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while _pid_exists(pid):
