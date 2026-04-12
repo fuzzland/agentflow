@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from textwrap import dedent
 
-from agentflow import Graph, codex, python_node
+from agentflow import Graph, claude, codex, python_node
 from agentflow.audit.intake import load_manifest
 from agentflow.audit.pipeline_builder import (
     AUDIT_MANIFEST_ENV,
@@ -14,6 +14,8 @@ from agentflow.audit.pipeline_builder import (
     REPO_ROOT,
     _AUDIT_CODEX_RETRIES,
     _AUDIT_CODEX_RETRY_BACKOFF_SECONDS,
+    _CURATION_NO_CHANGE_PATIENCE,
+    _CURATION_STATE_FILENAME,
     _DISCOVERY_NO_PROGRESS_PATIENCE,
     _DISCOVERY_STATE_FILENAME,
     _deployment_context_prompt,
@@ -328,7 +330,128 @@ def build_resume_graph(manifest_path: str, saved_run_json: str) -> Graph:
                 print(
                     json.dumps(
                         [finding.model_dump(mode="json") for finding in customer_visible_findings(state)],
+                        separators=(",", ":"),
+                    )
+                )
+                """
+            ),
+        )
+        load_finding_curation_state = python_node(
+            task_id="load_finding_curation_state",
+            code=_manifest_runtime_python_node(
+                f"""
+                import json
+                from pathlib import Path
+
+                from agentflow.audit.curation import current_curated_findings, load_curation_state
+                from agentflow.audit.discovery import findings_from_text
+                from agentflow.audit.intake import load_manifest
+
+                manifest = load_manifest(resolved_manifest_path)
+                state_path = Path(manifest.run.artifacts_dir) / "workspace" / "{_CURATION_STATE_FILENAME}"
+                base_findings_payload = {{{{ nodes.discovery_finalize.output | tojson }}}}
+                if not isinstance(base_findings_payload, str):
+                    base_findings_payload = json.dumps(base_findings_payload)
+                base_findings = findings_from_text(base_findings_payload)
+                state = load_curation_state(state_path)
+                print(
+                    json.dumps(
+                        [
+                            finding.model_dump(mode="json")
+                            for finding in current_curated_findings(state, base_findings)
+                        ],
+                        separators=(",", ":"),
+                    )
+                )
+                """
+            ),
+        )
+        finding_curation_review = python_node(
+            task_id="finding_curation_review",
+            code=dedent(
+                """
+                import json
+
+                from agentflow.audit.curation import curate_findings
+                from agentflow.audit.discovery import findings_from_text
+
+                findings_payload = {{ nodes.load_finding_curation_state.output | tojson }}
+                if not isinstance(findings_payload, str):
+                    findings_payload = json.dumps(findings_payload)
+                findings = findings_from_text(findings_payload)
+                print(
+                    json.dumps(
+                        [finding.model_dump(mode="json") for finding in curate_findings(findings)],
+                        separators=(",", ":"),
+                    )
+                )
+                """
+            ).strip(),
+        )
+        finding_curation_gate = python_node(
+            task_id="finding_curation_gate",
+            code=_manifest_runtime_python_node(
+                f"""
+                import json
+                from pathlib import Path
+
+                from agentflow.audit.curation import advance_curation_state
+                from agentflow.audit.discovery import findings_from_text
+                from agentflow.audit.intake import load_manifest
+
+                manifest = load_manifest(resolved_manifest_path)
+                state_path = Path(manifest.run.artifacts_dir) / "workspace" / "{_CURATION_STATE_FILENAME}"
+                review_output = {{{{ nodes.finding_curation_review.output | tojson }}}}
+                if not isinstance(review_output, str):
+                    review_output = json.dumps(review_output)
+                findings = findings_from_text(review_output)
+                state, decision = advance_curation_state(
+                    state_path,
+                    findings,
+                    no_change_patience={_CURATION_NO_CHANGE_PATIENCE},
+                )
+                print(
+                    json.dumps(
+                        {{
+                            "status": decision.status,
+                            "round": state.round,
+                            "consecutive_no_change": state.consecutive_no_change,
+                            "changed": decision.changed,
+                            "previous_count": decision.previous_count,
+                            "current_count": decision.current_count,
+                        }},
                         indent=2,
+                    )
+                )
+                """
+            ),
+            success_criteria=[{"kind": "output_contains", "value": '"status": "STOP"'}],
+        )
+        finding_curation_finalize = python_node(
+            task_id="finding_curation_finalize",
+            code=_manifest_runtime_python_node(
+                f"""
+                import json
+                from pathlib import Path
+
+                from agentflow.audit.curation import current_curated_findings, load_curation_state
+                from agentflow.audit.discovery import findings_from_text
+                from agentflow.audit.intake import load_manifest
+
+                manifest = load_manifest(resolved_manifest_path)
+                state_path = Path(manifest.run.artifacts_dir) / "workspace" / "{_CURATION_STATE_FILENAME}"
+                base_findings_payload = {{{{ nodes.discovery_finalize.output | tojson }}}}
+                if not isinstance(base_findings_payload, str):
+                    base_findings_payload = json.dumps(base_findings_payload)
+                base_findings = findings_from_text(base_findings_payload)
+                state = load_curation_state(state_path)
+                print(
+                    json.dumps(
+                        [
+                            finding.model_dump(mode="json")
+                            for finding in current_curated_findings(state, base_findings)
+                        ],
+                        separators=(",", ":"),
                     )
                 )
                 """
@@ -340,12 +463,19 @@ def build_resume_graph(manifest_path: str, saved_run_json: str) -> Graph:
                 "Author Foundry PoC tests for every non-rejected validated finding.\n"
                 f"Legacy policy field: max_poc_candidates={manifest.policy.max_poc_candidates} (ignored in this pipeline version; every shipped finding must have a PoC).\n"
                 "Keep changes limited to test assets and the minimum harness support needed.\n"
+                "Do not spend time building a broad generic framework before producing concrete PoC files.\n"
+                "In your first edit batch, create at least one concrete `test/security/*.t.sol` file or return blocked mappings for findings you cannot implement.\n"
+                "Favor direct, targeted tests and tiny local mocks over reusable abstraction layers.\n"
+                "If a finding is not realistically PoC-able in this repository, return it with null test fields and a short reason instead of over-engineering scaffolding.\n"
+                "Prioritize the strongest and cheapest PoCs first. You do not need to make every finding PoC-able.\n"
+                "For findings that would require disproportionate new infrastructure, quickly return a null mapping with a concrete blocked reason.\n"
                 "After writing files, return only a JSON array with this shape:\n"
                 '[{"finding_id":"CAN-01","test_path":"test/security/VaultPoC.t.sol","test_name":"test_can_01_initialize_takeover","reason":null}]\n'
                 "Include every non-rejected finding exactly once. If you cannot produce a PoC for a finding, keep it in the array with null test fields and a short reason.\n\n"
-                "{{ nodes.discovery_finalize.output }}"
+                "{{ nodes.finding_curation_finalize.output }}"
             ),
             tools="read_write",
+            timeout_seconds=1800,
             extra_args=CODEX_BYPASS_EXTRA_ARGS,
             retries=_AUDIT_CODEX_RETRIES,
             retry_backoff_seconds=_AUDIT_CODEX_RETRY_BACKOFF_SECONDS,
@@ -371,7 +501,7 @@ def build_resume_graph(manifest_path: str, saved_run_json: str) -> Graph:
                     if isinstance(prepared_payload, str)
                     else prepared_payload
                 )
-                findings_payload = {{ nodes.discovery_finalize.output | tojson }}
+                findings_payload = {{ nodes.finding_curation_finalize.output | tojson }}
                 findings = (
                     extract_json_document(findings_payload)
                     if isinstance(findings_payload, str)
@@ -457,7 +587,7 @@ def build_resume_graph(manifest_path: str, saved_run_json: str) -> Graph:
                 "For every kept finding, set `validation_status` to `poc_confirmed`, `poc.status` to `passed`, and `poc.test_path` to the authored test path.\n"
                 "Reject or drop everything else.\n"
                 "Return only a JSON array of final `FindingRecord` objects.\n\n"
-                "Validated findings:\n{{ nodes.discovery_finalize.output }}\n\n"
+                "Validated findings:\n{{ nodes.finding_curation_finalize.output }}\n\n"
                 "PoC authoring map:\n{{ nodes.poc_author.output }}\n\n"
                 "PoC verification:\n{{ nodes.poc_verify.output }}"
             ),
@@ -475,7 +605,11 @@ def build_resume_graph(manifest_path: str, saved_run_json: str) -> Graph:
 
                 from agentflow.audit.intake import build_report_manifest, load_manifest
                 from agentflow.audit.models import FindingRecord
-                from agentflow.audit.reporting import extract_json_document, write_report_bundle
+                from agentflow.audit.reporting import (
+                    extract_json_document,
+                    root_audit_report_path,
+                    write_report_bundle,
+                )
 
                 manifest = load_manifest(resolved_manifest_path)
                 materialized_payload = {{ nodes.materialize_target.output | tojson }}
@@ -502,19 +636,18 @@ def build_resume_graph(manifest_path: str, saved_run_json: str) -> Graph:
                 )
                 report_dir = Path(manifest.run.artifacts_dir) / "report"
                 write_report_bundle(report_dir, report_manifest, findings)
-                print((report_dir / "AUDIT_REPORT.md").read_text(encoding="utf-8"))
+                print(root_audit_report_path(report_dir).read_text(encoding="utf-8"))
                 """
             ),
         )
-        report_review = codex(
+        report_review = claude(
             task_id="report_review",
             prompt=(
-                "Review this draft audit report as a delivery artifact and return only a revised JSON array of final findings.\n"
-                "Do not add new findings.\n"
-                "Only keep findings that remain PoC-confirmed and have a non-null `poc.test_path`.\n"
-                "Merge findings that are materially the same root cause or exploit path.\n"
-                "Reject only findings that are absolutely impossible in the real business scenario implied by the codebase, manifest, and deployment context.\n"
-                "If a finding is merely unlikely or lacks extra business context, keep it.\n"
+                "Review this draft audit report as a delivery QA pass and return only a revised JSON array of final findings.\n"
+                "Do not add, remove, merge, split, reject, or re-scope findings.\n"
+                "Do not change finding count, `dedup_fingerprint`, `severity`, `validation_status`, or `poc.test_path`.\n"
+                "Keep every finding PoC-confirmed with a non-null `poc.test_path`.\n"
+                "Only improve wording, ordering, report-safe phrasing, and citation clarity.\n"
                 "Return only final `FindingRecord` JSON.\n\n"
                 f"{deployment_context_prompt}\n"
                 "Draft report:\n{{ nodes.report_build.output }}\n\n"
@@ -522,6 +655,7 @@ def build_resume_graph(manifest_path: str, saved_run_json: str) -> Graph:
                 "PoC verification:\n{{ nodes.poc_verify.output }}"
             ),
             tools="read_only",
+            timeout_seconds=900,
             extra_args=CODEX_BYPASS_EXTRA_ARGS,
             retries=_AUDIT_CODEX_RETRIES,
             retry_backoff_seconds=_AUDIT_CODEX_RETRY_BACKOFF_SECONDS,
@@ -536,7 +670,11 @@ def build_resume_graph(manifest_path: str, saved_run_json: str) -> Graph:
 
                 from agentflow.audit.intake import build_report_manifest, load_manifest
                 from agentflow.audit.models import FindingRecord
-                from agentflow.audit.reporting import extract_json_document, write_report_bundle
+                from agentflow.audit.reporting import (
+                    extract_json_document,
+                    root_audit_report_path,
+                    write_report_bundle,
+                )
 
                 manifest = load_manifest(resolved_manifest_path)
                 materialized_payload = {{ nodes.materialize_target.output | tojson }}
@@ -563,7 +701,7 @@ def build_resume_graph(manifest_path: str, saved_run_json: str) -> Graph:
                 )
                 report_dir = Path(manifest.run.artifacts_dir) / "report"
                 write_report_bundle(report_dir, report_manifest, findings)
-                print((report_dir / "AUDIT_REPORT.md").read_text(encoding="utf-8"))
+                print(root_audit_report_path(report_dir).read_text(encoding="utf-8"))
                 """
             ),
         )
@@ -640,8 +778,9 @@ def build_resume_graph(manifest_path: str, saved_run_json: str) -> Graph:
         )
 
         intake_target >> materialize_target >> prepare_foundry_workspace >> load_discovery_state >> load_saved_shards >> finding_reduce
-        finding_reduce >> evidence_review >> evidence_gate >> novelty_gate >> discovery_finalize >> poc_author >> poc_verify >> final_adjudication
+        finding_reduce >> evidence_review >> evidence_gate >> novelty_gate >> discovery_finalize >> load_finding_curation_state >> finding_curation_review >> finding_curation_gate >> finding_curation_finalize >> poc_author >> poc_verify >> final_adjudication
         novelty_gate.on_failure >> load_discovery_state
+        finding_curation_gate.on_failure >> load_finding_curation_state
         final_adjudication >> report_build >> report_review >> report_finalize_build >> package_readme_build >> publish_artifacts
 
     return graph

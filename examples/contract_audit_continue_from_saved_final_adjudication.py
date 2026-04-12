@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from agentflow import Graph, codex, python_node
+from agentflow import Graph, claude, codex, python_node
 from agentflow.audit.intake import load_manifest
 from agentflow.audit.pipeline_builder import (
     AUDIT_MANIFEST_ENV,
@@ -132,7 +132,11 @@ with Graph(
 
             from agentflow.audit.intake import build_report_manifest, load_manifest
             from agentflow.audit.models import FindingRecord
-            from agentflow.audit.reporting import extract_json_document, write_report_bundle
+            from agentflow.audit.reporting import (
+                extract_json_document,
+                root_audit_report_path,
+                write_report_bundle,
+            )
 
             manifest = load_manifest(resolved_manifest_path)
             materialized_payload = {{ nodes.materialize_target.output | tojson }}
@@ -159,19 +163,18 @@ with Graph(
             )
             report_dir = Path(manifest.run.artifacts_dir) / "report"
             write_report_bundle(report_dir, report_manifest, findings)
-            print((report_dir / "AUDIT_REPORT.md").read_text(encoding="utf-8"))
+            print(root_audit_report_path(report_dir).read_text(encoding="utf-8"))
             """
         ),
     )
-    report_review = codex(
+    report_review = claude(
         task_id="report_review",
         prompt=(
-            "Review this draft audit report as a delivery artifact and return only a revised JSON array of final findings.\n"
-            "Do not add new findings.\n"
-            "Only keep findings that remain PoC-confirmed and have a non-null `poc.test_path`.\n"
-            "Merge findings that are materially the same root cause or exploit path.\n"
-            "Reject only findings that are absolutely impossible in the real business scenario implied by the codebase, manifest, and deployment context.\n"
-            "If a finding is merely unlikely or lacks extra business context, keep it.\n"
+            "Review this draft audit report as a delivery QA pass and return only a revised JSON array of final findings.\n"
+            "Do not add, remove, merge, split, reject, or re-scope findings.\n"
+            "Do not change finding count, `dedup_fingerprint`, `severity`, `validation_status`, or `poc.test_path`.\n"
+            "Keep every finding PoC-confirmed with a non-null `poc.test_path`.\n"
+            "Only improve wording, ordering, report-safe phrasing, and citation clarity.\n"
             "Return only final `FindingRecord` JSON.\n\n"
             f"{deployment_context_prompt}\n"
             "Draft report:\n{{ nodes.report_build.output }}\n\n"
@@ -179,6 +182,7 @@ with Graph(
             "PoC verification:\n{{ nodes.load_saved_poc_verify.output }}"
         ),
         tools="read_only",
+        timeout_seconds=900,
         extra_args=CODEX_BYPASS_EXTRA_ARGS,
         retries=_AUDIT_CODEX_RETRIES,
         retry_backoff_seconds=_AUDIT_CODEX_RETRY_BACKOFF_SECONDS,
@@ -193,7 +197,11 @@ with Graph(
 
             from agentflow.audit.intake import build_report_manifest, load_manifest
             from agentflow.audit.models import FindingRecord
-            from agentflow.audit.reporting import extract_json_document, write_report_bundle
+            from agentflow.audit.reporting import (
+                extract_json_document,
+                root_audit_report_path,
+                write_report_bundle,
+            )
 
             manifest = load_manifest(resolved_manifest_path)
             materialized_payload = {{ nodes.materialize_target.output | tojson }}
@@ -220,7 +228,7 @@ with Graph(
             )
             report_dir = Path(manifest.run.artifacts_dir) / "report"
             write_report_bundle(report_dir, report_manifest, findings)
-            print((report_dir / "AUDIT_REPORT.md").read_text(encoding="utf-8"))
+            print(root_audit_report_path(report_dir).read_text(encoding="utf-8"))
             """
         ),
     )

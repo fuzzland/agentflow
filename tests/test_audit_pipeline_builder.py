@@ -45,6 +45,10 @@ def test_build_contract_audit_graph_contains_expected_nodes(tmp_path: Path) -> N
         "evidence_gate",
         "novelty_gate",
         "discovery_finalize",
+        "load_finding_curation_state",
+        "finding_curation_review",
+        "finding_curation_gate",
+        "finding_curation_finalize",
         "poc_author",
         "poc_verify",
         "final_adjudication",
@@ -217,6 +221,43 @@ def test_novelty_gate_embeds_evidence_output_via_tojson(tmp_path: Path) -> None:
     assert 'evidence_gate_output = {{ nodes.evidence_gate.output | tojson }}' in novelty_gate["prompt"]
 
 
+def test_surface_map_embeds_structured_payloads_via_raw_tojson(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": ".agentflow/audits/example-vault",
+                    "parallel_shards": 6,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": True,
+                    "max_poc_candidates": 5,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    graph = build_contract_audit_graph(str(manifest_path))
+    payload = graph.to_payload()
+    surface_map = next(node for node in payload["nodes"] if node["id"] == "surface_map")
+
+    assert 'prepared_payload = {{ nodes.prepare_foundry_workspace.output | tojson }}' in surface_map["prompt"]
+    assert 'discovery_state_payload = {{ nodes.load_discovery_state.output | tojson }}' in surface_map["prompt"]
+
+
 def test_python_nodes_embed_structured_outputs_via_tojson(tmp_path: Path) -> None:
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(
@@ -248,15 +289,93 @@ def test_python_nodes_embed_structured_outputs_via_tojson(tmp_path: Path) -> Non
 
     spec = build_contract_audit_graph(str(manifest_path)).to_spec()
 
+    assert "{{ nodes.finding_curation_finalize.output }}" in spec.node_map["poc_author"].prompt
+    assert "{{ nodes.discovery_finalize.output }}" not in spec.node_map["poc_author"].prompt
     assert 'prepared_payload = {{ nodes.prepare_foundry_workspace.output | tojson }}' in spec.node_map["poc_verify"].prompt
-    assert 'findings_payload = {{ nodes.discovery_finalize.output | tojson }}' in spec.node_map["poc_verify"].prompt
+    assert 'findings_payload = {{ nodes.finding_curation_finalize.output | tojson }}' in spec.node_map["poc_verify"].prompt
     assert 'authored_payload = {{ nodes.poc_author.output | tojson }}' in spec.node_map["poc_verify"].prompt
+    assert 'findings_payload = {{ nodes.finding_curation_finalize.output | tojson }}' in spec.node_map["final_adjudication"].prompt
     assert 'materialized_payload = {{ nodes.materialize_target.output | tojson }}' in spec.node_map["report_build"].prompt
     assert 'final_adjudication_payload = {{ nodes.final_adjudication.output | tojson }}' in spec.node_map["report_build"].prompt
     assert 'materialized_payload = {{ nodes.materialize_target.output | tojson }}' in spec.node_map["report_finalize_build"].prompt
     assert 'report_review_payload = {{ nodes.report_review.output | tojson }}' in spec.node_map["report_finalize_build"].prompt
     assert 'poc_verify_payload = {{ nodes.poc_verify.output | tojson }}' in spec.node_map["package_readme_build"].prompt
     assert '"readme": "README.md"' in spec.node_map["publish_artifacts"].prompt
+
+
+def test_finding_curation_gate_embeds_review_output_via_tojson(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": ".agentflow/audits/example-vault",
+                    "parallel_shards": 6,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": True,
+                    "max_poc_candidates": 5,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    graph = build_contract_audit_graph(str(manifest_path))
+    payload = graph.to_payload()
+    finding_curation_gate = next(
+        node for node in payload["nodes"] if node["id"] == "finding_curation_gate"
+    )
+
+    assert 'review_output = {{ nodes.finding_curation_review.output | tojson }}' in finding_curation_gate["prompt"]
+
+
+def test_report_review_is_delivery_qa_only(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": ".agentflow/audits/example-vault",
+                    "parallel_shards": 6,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": True,
+                    "max_poc_candidates": 5,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    graph = build_contract_audit_graph(str(manifest_path))
+    payload = graph.to_payload()
+    report_review = next(node for node in payload["nodes"] if node["id"] == "report_review")
+
+    assert "Do not add, remove, merge, split, reject, or re-scope findings." in report_review["prompt"]
+    assert "Only improve wording, ordering, report-safe phrasing, and citation clarity." in report_review["prompt"]
 
 
 def test_public_example_prints_contract_audit_graph(tmp_path: Path) -> None:
@@ -365,6 +484,56 @@ def test_finalize_from_saved_review_example_includes_package_readme_stage(tmp_pa
     load_saved_poc_verify = next(node for node in payload["nodes"] if node["id"] == "load_saved_poc_verify")
     assert "from agentflow.audit.intake import load_manifest" in load_saved_poc_verify["prompt"]
     assert "manifest = load_manifest(resolved_manifest_path)" in load_saved_poc_verify["prompt"]
+
+
+def test_continue_from_existing_pocs_example_skips_poc_author_and_derives_mappings(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": str(tmp_path / "artifacts"),
+                    "parallel_shards": 6,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": True,
+                    "max_poc_candidates": 5,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    repo_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env[AUDIT_MANIFEST_ENV] = str(manifest_path)
+
+    completed = subprocess.run(
+        [sys.executable, str(repo_root / "examples" / "contract_audit_continue_from_existing_pocs.py")],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+        env=env,
+    )
+
+    payload = json.loads(completed.stdout)
+    node_ids = [node["id"] for node in payload["nodes"]]
+
+    assert payload["name"] == "contract-audit-continue-from-existing-pocs"
+    assert "derive_poc_mappings" in node_ids
+    assert "poc_author" not in node_ids
 
 
 def test_public_example_resolves_repo_root_working_dir_for_python_utility_nodes() -> None:
@@ -569,16 +738,18 @@ def test_build_contract_audit_graph_threads_policy_and_locks_poc_author_cwd(tmp_
     assert "allow_source_confirmed_without_poc=False" in spec.node_map["evidence_gate"].prompt
     assert "max_poc_candidates=2" in spec.node_map["poc_author"].prompt
     assert "every non-rejected validated finding" in spec.node_map["poc_author"].prompt
-    assert "Do not return any `source_confirmed` findings." in spec.node_map["final_adjudication"].prompt
-    assert "only findings with a corresponding Foundry PoC test may survive" in spec.node_map["final_adjudication"].prompt
-    assert "Only keep findings that remain PoC-confirmed" in spec.node_map["report_review"].prompt
-    assert "absolutely impossible in the real business scenario" in spec.node_map["report_review"].prompt
+    assert spec.node_map["final_adjudication"].agent.value == "python"
+    assert 'if build_status != "passed" or test_status != "passed":' in spec.node_map["final_adjudication"].prompt
+    assert 'validation_status": "poc_confirmed"' in spec.node_map["final_adjudication"].prompt
+    assert "Do not add, remove, merge, split, reject, or re-scope findings." in spec.node_map["report_review"].prompt
+    assert "Only improve wording, ordering, report-safe phrasing, and citation clarity." in spec.node_map["report_review"].prompt
     assert "intentionally keeps slasher at zero" in spec.node_map["evidence_review"].prompt
     assert spec.node_map["novelty_gate"].on_failure_restart == ["load_discovery_state"]
+    assert spec.node_map["finding_curation_gate"].on_failure_restart == ["load_finding_curation_state"]
     assert 'evidence_gate_output = {{ nodes.evidence_gate.output | tojson }}' in spec.node_map["novelty_gate"].prompt
     assert 'findings = findings_from_text(evidence_gate_output)' in spec.node_map["novelty_gate"].prompt
-    assert "{{ nodes.discovery_finalize.output }}" in spec.node_map["poc_author"].prompt
-    assert "{{ nodes.poc_author.output }}" in spec.node_map["final_adjudication"].prompt
+    assert "{{ nodes.finding_curation_finalize.output }}" in spec.node_map["poc_author"].prompt
+    assert 'authored_payload = {{ nodes.poc_author.output | tojson }}' in spec.node_map["final_adjudication"].prompt
     assert "{{ nodes.report_build.output }}" in spec.node_map["report_review"].prompt
     assert 'report_review_payload = {{ nodes.report_review.output | tojson }}' in spec.node_map["report_finalize_build"].prompt
 
@@ -615,9 +786,49 @@ def test_poc_verify_tracks_authored_test_coverage(tmp_path: Path) -> None:
     spec = build_contract_audit_graph(str(manifest_path)).to_spec()
 
     assert 'authored_payload = {{ nodes.poc_author.output | tojson }}' in spec.node_map["poc_verify"].prompt
-    assert 'findings_payload = {{ nodes.discovery_finalize.output | tojson }}' in spec.node_map["poc_verify"].prompt
+    assert 'findings_payload = {{ nodes.finding_curation_finalize.output | tojson }}' in spec.node_map["poc_verify"].prompt
     assert "missing_mappings" in spec.node_map["poc_verify"].prompt
     assert "nonexistent_test_paths" in spec.node_map["poc_verify"].prompt
+
+
+def test_final_adjudication_is_deterministic_python_filter_that_allows_partial_poc_coverage(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": ".agentflow/audits/example-vault",
+                    "parallel_shards": 4,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": False,
+                    "max_poc_candidates": 2,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    spec = build_contract_audit_graph(str(manifest_path)).to_spec()
+
+    assert spec.node_map["final_adjudication"].agent.value == "python"
+    prompt = spec.node_map["final_adjudication"].prompt
+    assert 'findings_payload = {{ nodes.finding_curation_finalize.output | tojson }}' in prompt
+    assert 'authored_payload = {{ nodes.poc_author.output | tojson }}' in prompt
+    assert 'verification_payload = {{ nodes.poc_verify.output | tojson }}' in prompt
+    assert 'if build_status != "passed" or test_status != "passed":' in prompt
+    assert 'if not test_path or finding.id in missing_test_paths:' in prompt
 
 
 def test_build_contract_audit_graph_accepts_absolute_artifacts_dir_for_poc_workspace(tmp_path: Path) -> None:
@@ -852,6 +1063,39 @@ def test_normalize_shard_findings_falls_back_to_trace_events_json() -> None:
             "track": "accounting-and-rounding",
             "findings": [
                 {"id": "A-2", "title": "Issue B"},
+            ],
+        }
+    ]
+
+
+def test_normalize_shard_findings_reads_item_completed_agent_message_from_trace_events() -> None:
+    normalized = normalize_shard_findings(
+        [
+            {
+                "track": "state-machine-and-epoch-flow",
+                "output": "progress only",
+                "trace_events": [
+                    {
+                        "kind": "item_completed",
+                        "raw": {
+                            "type": "item.completed",
+                            "item": {
+                                "id": "item_91",
+                                "type": "agent_message",
+                                "text": '[{"id":"S-1","title":"Issue C"}]',
+                            },
+                        },
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert normalized == [
+        {
+            "track": "state-machine-and-epoch-flow",
+            "findings": [
+                {"id": "S-1", "title": "Issue C"},
             ],
         }
     ]
