@@ -536,6 +536,62 @@ def test_continue_from_existing_pocs_example_skips_poc_author_and_derives_mappin
     assert "poc_author" not in node_ids
 
 
+def test_continue_from_saved_final_adjudication_publish_artifacts_snippet_executes(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "target": {
+                    "source": {
+                        "kind": "github",
+                        "repo_url": "https://github.com/example/contracts",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                    },
+                    "report": {
+                        "project_name": "Example Vault",
+                        "audit_scope": "src/contracts/vault",
+                    },
+                },
+                "run": {
+                    "artifacts_dir": str(tmp_path / "artifacts"),
+                    "parallel_shards": 6,
+                },
+                "policy": {
+                    "allow_source_confirmed_without_poc": True,
+                    "max_poc_candidates": 5,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    repo_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env[AUDIT_MANIFEST_ENV] = str(manifest_path)
+
+    completed = subprocess.run(
+        [sys.executable, str(repo_root / "examples" / "contract_audit_continue_from_saved_final_adjudication.py")],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+        env=env,
+    )
+
+    payload = json.loads(completed.stdout)
+    publish_node = next(node for node in payload["nodes"] if node["id"] == "publish_artifacts")
+
+    executed = subprocess.run(
+        [sys.executable, "-c", publish_node["prompt"]],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+    )
+
+    assert executed.returncode == 0, executed.stderr
+
+
 def test_public_example_resolves_repo_root_working_dir_for_python_utility_nodes() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     pipeline_path = repo_root / "examples" / "contract_audit.py"

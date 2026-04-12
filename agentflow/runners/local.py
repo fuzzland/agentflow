@@ -248,7 +248,7 @@ class LocalRunner(Runner):
     def _signal_process_group(self, process_group_id: int | None, sig: int) -> None:
         if process_group_id is None:
             return
-        with suppress(ProcessLookupError):
+        with suppress(ProcessLookupError, PermissionError):
             os.killpg(process_group_id, sig)
 
     async def _terminate_with_fallback(self, process, wait_task: asyncio.Task[int], process_group_id: int | None) -> None:

@@ -112,6 +112,8 @@ The exact manifest used for this engagement was:
 Run validation first from the AgentFlow repository root:
 
 ```bash
+cd /data/agentenv/agentflow
+
 AGENTFLOW_CONTRACT_AUDIT_MANIFEST=/data/agentenv/agentflow-audit-reports/solv/cap-vault-reports/contract_audit_manifest.json \
 PATH="$HOME/.foundry/bin:$PATH" \
 /data/agentenv/agentflow/.venv/bin/python -m agentflow.cli validate examples/contract_audit.py
@@ -124,6 +126,8 @@ This checks that the manifest shape, source configuration, scope path, artifact 
 The real Cap Vault run used this command:
 
 ```bash
+cd /data/agentenv/agentflow
+
 AGENTFLOW_CONTRACT_AUDIT_MANIFEST=/data/agentenv/agentflow-audit-reports/solv/cap-vault-reports/contract_audit_manifest.json \
 PATH="$HOME/.foundry/bin:$PATH" \
 /data/agentenv/agentflow/.venv/bin/python -m agentflow.cli run examples/contract_audit.py \
@@ -143,7 +147,7 @@ This specific run:
 
 The completed run reported:
 
-- `4 total` findings
+- `6 total` findings
 - `2 high`, `2 medium`, `2 low`
 - `6 PoC Confirmed`, `0 Source Confirmed`
 
