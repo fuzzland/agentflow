@@ -89,7 +89,7 @@ class CodexAdapter(AgentAdapter):
             command.extend(["--disable", "plugins"])
             command.extend(["--add-dir", paths.target_workdir])
         command.extend(node.extra_args)
-        command.append(prompt)
+        command.append("-")
 
         env = merge_env_layers(getattr(provider, "env", None), node.env)
         runtime_files: dict[str, str] = {}
@@ -107,4 +107,5 @@ class CodexAdapter(AgentAdapter):
             cwd=cwd,
             trace_kind="codex",
             runtime_files=runtime_files,
+            stdin=prompt,
         )

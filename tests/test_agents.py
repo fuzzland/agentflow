@@ -68,6 +68,22 @@ def test_codex_adapter_uses_current_exec_flags(tmp_path):
     ]
 
 
+def test_codex_adapter_passes_prompt_via_stdin(tmp_path):
+    node = NodeSpec.model_validate(
+        {
+            "id": "plan",
+            "agent": "codex",
+            "prompt": "Plan",
+        }
+    )
+
+    prepared = CodexAdapter().prepare(node, "Plan", _paths(tmp_path))
+
+    assert prepared.command[-1] == "-"
+    assert "Plan" not in prepared.command
+    assert prepared.stdin == "Plan"
+
+
 def test_codex_adapter_suppresses_unstable_feature_warning(tmp_path):
     node = NodeSpec.model_validate(
         {
